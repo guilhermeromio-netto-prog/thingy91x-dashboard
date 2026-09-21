@@ -1,4 +1,4 @@
-const NRF_CLOUD_BASE = 'https://api.nrfcloud.com/v1';
+const NRF_CLOUD_BASE = '/.netlify/functions/nrfcloud';
 
 let config = {
     apiKey: localStorage.getItem('nrf_api_key') || '',
