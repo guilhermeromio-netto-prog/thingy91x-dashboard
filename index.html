@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thingy:91X — Deutsche Telekom IoT</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <div class="header-left">
+                <div class="logo-wrap">
+                    <svg class="logo-t" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#E20074"/><path d="M10 8h12v4h-4v12h-4V12H10V8z" fill="white"/></svg>
+                    <span class="logo-text">Thingy:91X</span>
+                </div>
+                <span class="badge">Deutsche Telekom IoT</span>
+            </div>
+            <div class="header-right">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="dot"></span>
+                    <span class="label">Conectando...</span>
+                </div>
+                <button class="btn btn-ghost" id="configBtn" aria-label="Configurações">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Hero Card -->
+            <section class="hero-card">
+                <div class="hero-main">
+                    <div class="device-identity">
+                        <h1 id="deviceName">Thingy:91X</h1>
+                        <div class="device-meta">
+                            <span class="chip" id="deviceId">—</span>
+                            <span class="chip" id="firmwareVersion">—</span>
+                            <span class="chip" id="lastSeen">—</span>
+                        </div>
+                    </div>
+                    <div class="hero-gps">
+                        <div class="gps-primary">
+                            <span class="label">Posição</span>
+                            <div class="coords" id="gpsCoords">Aguardando GPS...</div>
+                            <div class="gps-meta">
+                                <span id="gpsAcc">—</span>
+                                <span id="gpsSats">—</span>
+                            </div>
+                        </div>
+                        <div class="gps-actions">
+                            <button class="btn btn-primary" id="centerMap"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg> Centralizar</button>
+                            <button class="btn btn-outline" id="toggleTrail"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Trilha: <span id="trailStatus">ON</span></button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Grid Cards -->
+            <div class="grid" id="grid">
+                <!-- Environment -->
+                <article class="card card-env">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
+                        <h2>Ambiente</h2>
+                    </header>
+                    <div class="card-body">
+                        <div class="metric metric-large">
+                            <span class="value" id="tempValue">—</span>
+                            <span class="unit">°C</span>
+                            <span class="metric-label">Temperatura</span>
+                        </div>
+                        <div class="metric-row">
+                            <div class="metric">
+                                <span class="value" id="humValue">—</span>
+                                <span class="unit">%</span>
+                                <span class="metric-label">Umidade</span>
+                            </div>
+                            <div class="metric">
+                                <span class="value" id="pressValue">—</span>
+                                <span class="unit">hPa</span>
+                                <span class="metric-label">Pressão</span>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <!-- Motion -->
+                <article class="card card-motion">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        <h2>Movimento</h2>
+                    </header>
+                    <div class="card-body">
+                        <div class="axis-row">
+                            <div class="axis"><span class="axis-label">X</span><span class="axis-value" id="accelX">—</span></div>
+                            <div class="axis"><span class="axis-label">Y</span><span class="axis-value" id="accelY">—</span></div>
+                            <div class="axis"><span class="axis-label">Z</span><span class="axis-value" id="accelZ">—</span></div>
+                        </div>
+                        <div class="metric">
+                            <span class="value" id="steps">—</span>
+                            <span class="metric-label">Passos</span>
+                        </div>
+                    </div>
+                </article>
+
+                <!-- Battery -->
+                <article class="card card-battery">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M23 10h-2M1 10H23"/></svg>
+                        <h2>Bateria</h2>
+                    </header>
+                    <div class="card-body">
+                        <div class="battery-wrap">
+                            <div class="battery-outer" id="batteryOuter">
+                                <div class="battery-inner" id="batteryInner"></div>
+                            </div>
+                            <span class="battery-pct" id="batteryValue">—</span>
+                        </div>
+                        <div class="battery-details">
+                            <span id="batteryVoltage">—</span>
+                            <span id="batteryCharging" class="chip chip-success"></span>
+                        </div>
+                    </div>
+                </article>
+
+                <!-- Network -->
+                <article class="card card-network">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M12 19v-4M12 3v2M19 12h-4M3 12h2"/></svg>
+                        <h2>Rede</h2>
+                    </header>
+                    <div class="card-body">
+                        <div class="net-row">
+                            <div class="net-item"><span class="net-label">RSRP</span><span class="net-value" id="rsrp">—</span></div>
+                            <div class="net-item"><span class="net-label">RSRQ</span><span class="net-value" id="rsrq">—</span></div>
+                        </div>
+                        <div class="net-operator" id="operator">—</div>
+                    </div>
+                </article>
+
+                <!-- Map -->
+                <article class="card card-map" style="grid-column: 1 / -1;">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/><circle cx="12" cy="11" r="3"/></svg>
+                        <h2>Localização</h2>
+                    </header>
+                    <div class="card-body map-body" id="map"></div>
+                </article>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <span>Deutsche Telekom AG — IoT Dashboard</span>
+            <span id="version">v1.0.0</span>
+        </footer>
+    </div>
+
+    <!-- Config Modal -->
+    <div class="modal" id="configModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <header class="modal-header">
+                <h2 id="modalTitle">Configuração nRF Cloud</h2>
+                <button class="modal-close" id="closeModal" aria-label="Fechar"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </header>
+            <div class="modal-body">
+                <p class="modal-hint">Insira sua API Key do nRF Cloud para conectar ao Thingy:91X.</p>
+                <div class="form-group">
+                    <label for="apiKey">API Key <span class="required">*</span></label>
+                    <input type="password" id="apiKey" placeholder="Bearer token (32 caracteres)" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                    <label for="teamId">Team ID <span class="optional">(opcional)</span></label>
+                    <input type="text" id="teamId" placeholder="Deixe vazio se tiver apenas um time" />
+                </div>
+                <div class="form-group">
+                    <label for="deviceIdInput">Device ID <span class="optional">(opcional)</span></label>
+                    <input type="text" id="deviceIdInput" placeholder="Auto-detecta o primeiro dispositivo" />
+                </div>
+                <p class="modal-link">Obtenha a key em <a href="https://nrfcloud.com/settings/api-keys" target="_blank" rel="noopener">nrfcloud.com → Settings → API Keys</a> (scope: <code>device:read</code>)</p>
+            </div>
+            <footer class="modal-footer">
+                <button class="btn btn-ghost" id="cancelConfig">Cancelar</button>
+                <button class="btn btn-primary" id="saveConfig">Salvar e Conectar</button>
+            </footer>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
