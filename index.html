@@ -3,11 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#E20074">
+    <meta name="description" content="Dashboard Thingy:91X — rastreador IoT via nRF Cloud">
     <title>Thingy:91X — Deutsche Telekom IoT</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=11">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -21,9 +26,9 @@
                 <span class="badge">Deutsche Telekom IoT</span>
             </div>
             <div class="header-right">
-                <div class="connection-status" id="connectionStatus">
-                    <span class="dot"></span>
-                    <span class="label">Conectando...</span>
+                <div class="connection-status status" id="connectionStatus">
+                    <span class="dot" id="connDot"></span>
+                    <span class="label" id="connLabel">Conectando...</span>
                 </div>
                 <button class="btn btn-ghost" id="configBtn" aria-label="Configurações">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -37,10 +42,16 @@
                 <div class="hero-main">
                     <div class="device-identity">
                         <h1 id="deviceName">Thingy:91X</h1>
+                        <div class="fleet-row">
+                            <select id="deviceSelect" aria-label="Selecionar dispositivo"></select>
+                            <button class="btn btn-ghost btn-sm" id="refreshFleet">↻ Frota</button>
+                            <span class="chip" id="fleetCount">—</span>
+                        </div>
                         <div class="device-meta">
                             <span class="chip" id="deviceId">—</span>
                             <span class="chip" id="firmwareVersion">—</span>
                             <span class="chip" id="lastSeen">—</span>
+                            <span class="chip chip-source" id="dataSourceBadge" title="Origem dos sensores">—</span>
                         </div>
                     </div>
                     <div class="hero-gps">
@@ -49,12 +60,24 @@
                             <div class="coords" id="gpsCoords">Aguardando GPS...</div>
                             <div class="gps-meta">
                                 <span id="gpsAcc">—</span>
+                                <span>·</span>
                                 <span id="gpsSats">—</span>
+                            </div>
+                            <div class="gps-details">
+                                <span>Lat <strong id="gpsLat">—</strong></span>
+                                <span>Lon <strong id="gpsLon">—</strong></span>
+                                <span>Alt <strong id="gpsAlt">—</strong></span>
+                                <span>Vel <strong id="gpsSpeed">—</strong></span>
                             </div>
                         </div>
                         <div class="gps-actions">
                             <button class="btn btn-primary" id="centerMap"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg> Centralizar</button>
                             <button class="btn btn-outline" id="toggleTrail"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Trilha: <span id="trailStatus">ON</span></button>
+                            <select id="trailRange" aria-label="Período da trilha">
+                                <option value="24">24h</option>
+                                <option value="168">7d</option>
+                                <option value="720">30d</option>
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -117,7 +140,7 @@
                     <div class="card-body">
                         <div class="battery-wrap">
                             <div class="battery-outer" id="batteryOuter">
-                                <div class="battery-inner" id="batteryInner"></div>
+                                <div class="battery-fill" id="batteryFill"></div>
                             </div>
                             <span class="battery-pct" id="batteryValue">—</span>
                         </div>
@@ -140,7 +163,77 @@
                             <div class="net-item"><span class="net-label">RSRQ</span><span class="net-value" id="rsrq">—</span></div>
                         </div>
                         <div class="net-operator" id="operator">—</div>
+                        <div class="net-extra"><span id="serviceType">—</span> · <span id="netBand">—</span></div>
                     </div>
+                </article>
+
+                <!-- Fleet -->
+                <article class="card card-fleet" style="grid-column: 1 / -1;">
+                    <header class="card-header">
+                        <h2>🚚 Frota</h2>
+                        <div class="log-actions"><button class="btn btn-ghost btn-sm" id="pollFleet">Atualizar frota</button></div>
+                    </header>
+                    <div class="card-body"><div class="fleet-grid" id="fleetGrid"></div></div>
+                </article>
+
+                <!-- Commands -->
+                <article class="card card-cmd">
+                    <header class="card-header"><h2>📡 Comandos → dispositivo</h2></header>
+                    <div class="card-body">
+                        <div class="form-group"><label for="cmdLed">LED (Asset Tracker: config.led)</label>
+                            <select id="cmdLed"><option value="">—</option><option value="red">Vermelho</option><option value="green">Verde</option><option value="blue">Azul</option><option value="off">Desligar</option></select></div>
+                        <div class="form-group"><label for="cmdGpsInterval">Intervalo GPS (s)</label>
+                            <input type="number" id="cmdGpsInterval" placeholder="ex: 60" min="10" max="86400" /></div>
+                        <div class="form-group"><label for="cmdBuzzer">Buzzer</label>
+                            <select id="cmdBuzzer"><option value="">—</option><option value="on">Ligar</option><option value="off">Desligar</option></select></div>
+                        <div class="form-group"><label for="cmdCustom">JSON desired custom</label>
+                            <input type="text" id="cmdCustom" placeholder='{"config":{"flip":true}}' /></div>
+                        <div class="cmd-row">
+                            <button class="btn btn-primary btn-sm" id="sendDesired">Enviar desired</button>
+                            <button class="btn btn-ghost btn-sm" id="sendPing">Ping (c2d)</button>
+                        </div>
+                        <p class="modal-hint">Usa PATCH /devices/{id}/state. Requer API key com escrita.</p>
+                    </div>
+                </article>
+
+                <!-- Geofence -->
+                <article class="card card-geo">
+                    <header class="card-header"><h2>⭕ Geofence</h2></header>
+                    <div class="card-body">
+                        <div class="form-group"><label for="geoRadius">Raio (m)</label>
+                            <input type="number" id="geoRadius" value="500" min="50" max="50000" /></div>
+                        <div class="cmd-row">
+                            <button class="btn btn-primary btn-sm" id="geoSet">Usar posição atual</button>
+                            <button class="btn btn-ghost btn-sm" id="geoClear">Limpar</button>
+                        </div>
+                        <div class="conn-item"><span class="conn-label">Estado</span><span class="conn-value" id="geoState">—</span></div>
+                    </div>
+                </article>
+
+                <!-- FOTA -->
+                <article class="card card-fota">
+                    <header class="card-header"><h2>⬆️ FOTA</h2>
+                        <div class="log-actions"><button class="btn btn-ghost btn-sm" id="refreshFota">Atualizar</button></div>
+                    </header>
+                    <div class="card-body">
+                        <div class="form-group"><label for="fotaList">Firmwares disponíveis</label><select id="fotaList"><option value="">—</option></select></div>
+                        <div class="form-group"><label for="fotaType">Tipo</label>
+                            <select id="fotaType"><option value="APP">APP</option><option value="MODEM">MODEM</option><option value="BOOT">BOOT</option></select></div>
+                        <div class="cmd-row"><button class="btn btn-primary btn-sm" id="createFota">Criar job FOTA</button></div>
+                        <div id="fotaJobs" class="fota-jobs">—</div>
+                    </div>
+                </article>
+
+                <!-- Messages / Export -->
+                <article class="card card-msgs" style="grid-column: 1 / -1;">
+                    <header class="card-header"><h2>💬 Mensagens recentes &amp; Export</h2>
+                        <div class="log-actions">
+                            <button class="btn btn-ghost btn-sm" id="exportCsv">CSV msgs</button>
+                            <button class="btn btn-ghost btn-sm" id="exportGeo">GeoJSON trilha</button>
+                            <button class="btn btn-ghost btn-sm" id="exportShadow">Shadow JSON</button>
+                        </div>
+                    </header>
+                    <div class="card-body"><div id="msgTable" class="msg-table">—</div></div>
                 </article>
 
                 <!-- Map -->
@@ -150,6 +243,38 @@
                         <h2>Localização</h2>
                     </header>
                     <div class="card-body map-body" id="map"></div>
+                </article>
+
+                <!-- Connection + Log -->
+                <article class="card card-log" style="grid-column: 1 / -1;">
+                    <header class="card-header">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        <h2>Conexão &amp; Log do dispositivo</h2>
+                        <div class="log-actions">
+                            <select id="logFilter" aria-label="Filtrar log">
+                                <option value="all">Tudo</option>
+                                <option value="info">Info</option>
+                                <option value="ok">OK</option>
+                                <option value="warn">Avisos</option>
+                                <option value="err">Erros</option>
+                                <option value="api">API</option>
+                            </select>
+                            <label class="autoscroll"><input type="checkbox" id="logAutoscroll" checked /> Auto-rolar</label>
+                            <button class="btn btn-ghost btn-sm" id="exportLog">Exportar</button>
+                            <button class="btn btn-ghost btn-sm" id="clearLog">Limpar</button>
+                        </div>
+                    </header>
+                    <div class="card-body">
+                        <div class="conn-grid">
+                            <div class="conn-item"><span class="conn-label">Estado</span><span class="conn-value" id="connState">—</span></div>
+                            <div class="conn-item"><span class="conn-label">Último visto</span><span class="conn-value" id="connLastSeen">—</span></div>
+                            <div class="conn-item"><span class="conn-label">Última mensagem</span><span class="conn-value" id="connLastMsg">—</span></div>
+                            <div class="conn-item"><span class="conn-label">Mensagens (poll)</span><span class="conn-value" id="connMsgCount">—</span></div>
+                            <div class="conn-item"><span class="conn-label">Latência API</span><span class="conn-value" id="connLatency">—</span></div>
+                            <div class="conn-item"><span class="conn-label">Poll</span><span class="conn-value" id="connPoll">10s</span></div>
+                        </div>
+                        <div class="log-panel" id="logPanel" aria-live="polite"></div>
+                    </div>
                 </article>
             </div>
         </main>
@@ -165,24 +290,36 @@
         <div class="modal-backdrop"></div>
         <div class="modal-content">
             <header class="modal-header">
-                <h2 id="modalTitle">Configuração nRF Cloud</h2>
+                <h2 id="modalTitle">Configuração Memfault / nRF Cloud</h2>
                 <button class="modal-close" id="closeModal" aria-label="Fechar"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </header>
             <div class="modal-body">
-                <p class="modal-hint">Insira sua API Key do nRF Cloud para conectar ao Thingy:91X.</p>
+                <p class="modal-hint">Duas chaves diferentes: Memfault (status/FW) e API Key da equipe nRF Cloud (GPS, sensores, trilha). OAT sozinho <strong>não</strong> lê ListMessages.</p>
                 <div class="form-group">
-                    <label for="apiKey">API Key <span class="required">*</span></label>
-                    <input type="password" id="apiKey" placeholder="Bearer token (32 caracteres)" autocomplete="off" />
+                    <label for="userEmail">E-mail Memfault <span class="optional">(para User API Key)</span></label>
+                    <input type="email" id="userEmail" placeholder="seu@email.com" autocomplete="username" />
                 </div>
                 <div class="form-group">
-                    <label for="teamId">Team ID <span class="optional">(opcional)</span></label>
-                    <input type="text" id="teamId" placeholder="Deixe vazio se tiver apenas um time" />
+                    <label for="apiKey">User API Key / OAT <span class="required">*</span></label>
+                    <input type="text" id="apiKey" placeholder="User API Key (perfil) ou oat_…" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="form-group">
-                    <label for="deviceIdInput">Device ID <span class="optional">(opcional)</span></label>
-                    <input type="text" id="deviceIdInput" placeholder="Auto-detecta o primeiro dispositivo" />
+                    <label for="teamApiKey">API Key da equipe (Simple Token) <span class="optional">GPS / sensores</span></label>
+                    <input type="text" id="teamApiKey" placeholder="~40 chars hex — User Account → Current Team Details (nao Project Key)" autocomplete="off" spellcheck="false" />
                 </div>
-                <p class="modal-link">Obtenha a key em <a href="https://nrfcloud.com/settings/api-keys" target="_blank" rel="noopener">nrfcloud.com → Settings → API Keys</a> (scope: <code>device:read</code>)</p>
+                <div class="form-group">
+                    <label for="orgSlug">Organization slug</label>
+                    <input type="text" id="orgSlug" placeholder="telekom" value="telekom" />
+                </div>
+                <div class="form-group">
+                    <label for="projectSlug">Project slug</label>
+                    <input type="text" id="projectSlug" placeholder="nrf-project" value="nrf-project" />
+                </div>
+                <div class="form-group">
+                    <label for="deviceIdInput">Device ID (UUID / CoAP client ID)</label>
+                    <input type="text" id="deviceIdInput" placeholder="50423451-3737-4337-80fc-110bddf418ff" />
+                </div>
+                <p class="modal-link">Memfault: perfil → User API Key (com e-mail) ou Admin → Organization Auth Tokens (OAT, e-mail vazio). GPS/sensores: menu ☰ → User Account → Current Team Details → API key (hex). Docs: <a href="https://docs.memfault.com/docs/legacy-nrfcloud/tokens-and-keys.md" target="_blank" rel="noopener">tokens e keys</a>.</p>
             </div>
             <footer class="modal-footer">
                 <button class="btn btn-ghost" id="cancelConfig">Cancelar</button>
@@ -192,6 +329,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=11"></script>
 </body>
 </html>

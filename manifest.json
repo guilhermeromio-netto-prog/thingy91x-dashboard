@@ -1,0 +1,12 @@
+{
+  "name": "Thingy:91X — Deutsche Telekom IoT",
+  "short_name": "Thingy91X",
+  "description": "Dashboard rastreador Thingy:91X via nRF Cloud",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f5f6fa",
+  "theme_color": "#E20074",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

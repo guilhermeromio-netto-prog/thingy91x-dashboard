@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node proxy.js",
-    "dev": "node --watch proxy.js"
+    "dev": "node --watch proxy.js",
+    "serve": "node proxy.js",
+    "check": "node --check app.js && node --check proxy.js && node --check netlify/functions/nrfcloud.js && echo OK"
   },
   "dependencies": {
     "express": "^4.19.2",
