@@ -113,6 +113,25 @@ RE_WIFI_AP_LINE = re.compile(
     r"(?:wi-?fi|wifi).*(?:ssid|bssid|ap\b)|(?:ssid|bssid).*(?:wi-?fi|wifi)",
     re.I,
 )
+# MAC + RSSI patterns (ATT dbg / wifi scan table / JSON-ish)
+RE_MAC = re.compile(r"\b([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\b")
+RE_MAC_DASH = re.compile(r"\b([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})\b")
+RE_WIFI_MAC_RSSI = re.compile(
+    r"(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}).{0,40}?"
+    r"(?:rssi|signal(?:Strength)?|level)\s*[:=]?\s*(?P<rssi>-?\d{1,3})",
+    re.I,
+)
+RE_WIFI_RSSI_MAC = re.compile(
+    r"(?:rssi|signal(?:Strength)?|level)\s*[:=]?\s*(?P<rssi>-?\d{1,3})"
+    r".{0,40}?(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})",
+    re.I,
+)
+# Zephyr wifi scan table row: ... | -45 | ... | aa:bb:cc:dd:ee:ff
+RE_WIFI_TABLE = re.compile(
+    r"\|\s*(?P<rssi>-?\d{1,3})\s*\|[^|]*\|\s*(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\s*$",
+    re.I | re.M,
+)
+RE_WIFI_COPIED = re.compile(r"Copied\s+(\d+)\s+Wi-?Fi\s+APs?", re.I)
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
@@ -131,7 +150,8 @@ def clear_pid():
 def atomic_write(path: Path, obj: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    data = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
+    clean = {k: v for k, v in obj.items() if not str(k).startswith("_")}
+    data = json.dumps(clean, indent=2, ensure_ascii=False) + "\n"
     tmp.write_text(data)
     os.replace(tmp, path)
 
@@ -160,6 +180,7 @@ def blank_state(err=None):
         "eciDec": None,
         "cellId": None,
         "wifiApCount": None,
+        "wifiAps": [],
         "wifiStatus": None,
         "temperatureC": None,
         "humidityPct": None,
@@ -472,25 +493,129 @@ def parse_xsnrsq(body: str, state: dict):
         pass
 
 
+def norm_mac(mac: str) -> str | None:
+    if not mac:
+        return None
+    mac = mac.strip().lower().replace("-", ":")
+    parts = mac.split(":")
+    if len(parts) != 6:
+        return None
+    try:
+        octets = [int(p, 16) for p in parts]
+    except ValueError:
+        return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    return ":".join(f"{o:02x}" for o in octets)
+
+
+def is_locally_administered(mac: str) -> bool:
+    """IEEE U/L bit (second LSB of first octet) — filter these for nRF Cloud Wi-Fi."""
+    n = norm_mac(mac)
+    if not n:
+        return True
+    first = int(n.split(":")[0], 16)
+    return bool(first & 0x02)
+
+
+def is_multicast_mac(mac: str) -> bool:
+    n = norm_mac(mac)
+    if not n:
+        return True
+    first = int(n.split(":")[0], 16)
+    return bool(first & 0x01)
+
+
+def merge_wifi_ap(state: dict, mac: str, rssi=None):
+    mac_n = norm_mac(mac)
+    if not mac_n or is_locally_administered(mac_n) or is_multicast_mac(mac_n):
+        return False
+    rssi_v = None
+    if rssi is not None:
+        try:
+            rssi_v = int(rssi)
+            if rssi_v > 0:
+                rssi_v = -rssi_v
+            if rssi_v < -120 or rssi_v > 0:
+                rssi_v = None
+        except (TypeError, ValueError):
+            rssi_v = None
+    aps = state.setdefault("wifiAps", [])
+    for ap in aps:
+        if ap.get("mac") == mac_n:
+            if rssi_v is not None:
+                ap["rssi"] = rssi_v
+            return True
+    entry = {"mac": mac_n}
+    if rssi_v is not None:
+        entry["rssi"] = rssi_v
+    aps.append(entry)
+    # Cap to strongest/most recent ~20
+    if len(aps) > 20:
+        state["wifiAps"] = aps[-20:]
+    state["wifiApCount"] = len(state["wifiAps"])
+    state["wifiStatus"] = f"{state['wifiApCount']} APs"
+    return True
+
+
 def ingest_wifi(txt: str, state: dict):
+    m = RE_WIFI_COPIED.search(txt)
+    if m:
+        try:
+            n = int(m.group(1))
+            prev = state.get("wifiApCount") or 0
+            # Copied N may include local MACs; keep max with parsed list length
+            state["wifiApCount"] = max(prev, n, len(state.get("wifiAps") or []))
+            state["wifiStatus"] = f"{state['wifiApCount']} APs (uart)"
+        except ValueError:
+            pass
+
+    for rx in (RE_WIFI_MAC_RSSI, RE_WIFI_RSSI_MAC, RE_WIFI_TABLE):
+        for m in rx.finditer(txt):
+            merge_wifi_ap(state, m.group("mac"), m.group("rssi"))
+
+    # Bare MAC lines near wifi context — only if line mentions wifi/bssid/ap/rssi
+    for ln in txt.splitlines():
+        if not RE_WIFI_AP_LINE.search(ln) and not re.search(r"\brssi\b|\bbssid\b|wifi\s+scan", ln, re.I):
+            # still accept table-like rows that have MAC + number
+            if not (RE_MAC.search(ln) and re.search(r"-\d{2,3}", ln)):
+                continue
+        rssi_m = re.search(r"(?:rssi|signal)\s*[:=]?\s*(-?\d{1,3})|\|\s*(-?\d{1,3})\s\|", ln, re.I)
+        rssi = None
+        if rssi_m:
+            rssi = rssi_m.group(1) or rssi_m.group(2)
+        for mx in RE_MAC.finditer(ln):
+            merge_wifi_ap(state, mx.group(1), rssi)
+        for mx in RE_MAC_DASH.finditer(ln):
+            merge_wifi_ap(state, mx.group(1), rssi)
+
     for rx in (RE_WIFI_COUNT, RE_WIFI_COUNT2):
         m = rx.search(txt)
         if m:
             try:
-                state["wifiApCount"] = int(m.group(1))
+                n = int(m.group(1))
+                prev = state.get("wifiApCount") or 0
+                parsed = len(state.get("wifiAps") or [])
+                state["wifiApCount"] = max(prev, n, parsed)
                 state["wifiStatus"] = f"{state['wifiApCount']} APs"
-                return
+                break
             except ValueError:
                 pass
-    # Count AP-ish lines in this chunk
-    hits = [ln for ln in txt.splitlines() if RE_WIFI_AP_LINE.search(ln)]
-    if hits:
-        n = len(hits)
-        prev = state.get("wifiApCount") or 0
-        state["wifiApCount"] = max(prev, n)
-        state["wifiStatus"] = state.get("wifiStatus") or f"{state['wifiApCount']} APs (uart)"
-    elif re.search(r"wi-?fi\s+scan|scanning\s+wi-?fi|wifi_scan", txt, re.I):
-        state["wifiStatus"] = state.get("wifiStatus") or "scan"
+    else:
+        hits = [ln for ln in txt.splitlines() if RE_WIFI_AP_LINE.search(ln)]
+        if hits and not (state.get("wifiAps")):
+            n = len(hits)
+            prev = state.get("wifiApCount") or 0
+            state["wifiApCount"] = max(prev, n)
+            state["wifiStatus"] = state.get("wifiStatus") or f"{state['wifiApCount']} APs (uart)"
+        elif re.search(r"wi-?fi\s+scan|scanning\s+wi-?fi|wifi_scan", txt, re.I) and not re.search(r"command not found", txt, re.I):
+            state["wifiStatus"] = state.get("wifiStatus") or "scan"
+
+    # Keep count aligned with usable APs when we have them
+    usable = state.get("wifiAps") or []
+    if usable:
+        state["wifiApCount"] = len(usable)
+        state["wifiStatus"] = f"{len(usable)} APs"
 
 
 def ingest_text(txt: str, state: dict):
@@ -643,6 +768,24 @@ def main():
                         ser.reset_input_buffer()
                     except Exception:
                         pass
+                    # One-shot Zephyr wifi scan (shell) — ATT often lacks `wifi`; never block AT loop
+                    if not state.get("_wifiProbeDone"):
+                        state["_wifiProbeDone"] = True
+                        try:
+                            for wcmd in ("wifi scan", "net wifi scan"):
+                                ser.write((wcmd + "\n").encode())
+                                time.sleep(0.15)
+                            wraw = drain(ser, 2.5)
+                            if wraw:
+                                txt = wraw.decode(errors="replace")
+                                ingest_text(txt, state)
+                                print(
+                                    f"[serial_telemetry] wifi scan probe → "
+                                    f"{len(state.get('wifiAps') or [])} usable APs",
+                                    flush=True,
+                                )
+                        except Exception as e:
+                            print(f"[serial_telemetry] wifi scan probe skip: {e}", flush=True)
 
                 for cmd in AT_CMDS:
                     try:
@@ -663,6 +806,7 @@ def main():
                     or state.get("temperatureC") is not None
                     or state.get("ipAddress") is not None
                     or state.get("rsrp") is not None
+                    or bool(state.get("wifiAps"))
                 )
                 notes = state.get("rawNotes") or ""
                 if notes.startswith("starting") or notes.startswith("port "):

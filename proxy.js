@@ -91,9 +91,15 @@ function softMessagesFromSerial(serial, deviceId) {
 }
 
 
-/** Cache cell→coords (OAT Location Services). Keyed by mcc/mnc/eci/tac. */
+/** Cache cell/wifi→coords (OAT Location Services). */
 const cellResolveCache = new Map(); // key -> { lat, lon, uncertainty, fulfilledWith, at }
+const wifiResolveCache = new Map();
 const CELL_RESOLVE_TTL_MS = 5 * 60 * 1000;
+const WIFI_RESOLVE_TTL_MS = 5 * 60 * 1000;
+/** Cached nRF Cloud tenant UUID for x-nrfcloud-tenantid (required by /location/wifi). */
+let cachedTenantId = (process.env.NRF_TENANT_ID || process.env.NRFCLOUD_TENANT_ID || '').trim() || null;
+let tenantDiscoverAt = 0;
+const TENANT_TTL_MS = 60 * 60 * 1000;
 
 function cellResolveKey(serial) {
   if (!serial) return null;
@@ -102,6 +108,151 @@ function cellResolveKey(serial) {
   const tac = serial.tacDec ?? (serial.tac ? parseInt(String(serial.tac), 16) : null);
   if (mcc == null || mnc == null || !Number.isFinite(eci) || !Number.isFinite(tac)) return null;
   return `${mcc}:${mnc}:${eci}:${tac}`;
+}
+
+function isLocallyAdministeredMac(mac) {
+  const parts = String(mac || '').toLowerCase().replace(/-/g, ':').split(':');
+  if (parts.length !== 6) return true;
+  const first = parseInt(parts[0], 16);
+  if (!Number.isFinite(first)) return true;
+  return (first & 0x02) !== 0 || (first & 0x01) !== 0;
+}
+
+function usableWifiAps(serial) {
+  const raw = Array.isArray(serial?.wifiAps) ? serial.wifiAps : [];
+  const out = [];
+  const seen = new Set();
+  for (const ap of raw) {
+    const mac = String(ap?.mac || ap?.macAddress || '').toLowerCase().replace(/-/g, ':');
+    if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) continue;
+    if (isLocallyAdministeredMac(mac)) continue;
+    if (seen.has(mac)) continue;
+    seen.add(mac);
+    const entry = { macAddress: mac };
+    let rssi = ap?.rssi ?? ap?.signalStrength;
+    if (rssi != null) {
+      rssi = Number(rssi);
+      if (Number.isFinite(rssi)) {
+        if (rssi > 0) rssi = -rssi;
+        if (rssi >= -120 && rssi <= 0) entry.signalStrength = Math.round(rssi);
+      }
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function wifiResolveKey(aps) {
+  return aps.map((a) => a.macAddress).sort().join(',');
+}
+
+async function discoverTenantId(auth, deviceIdHint) {
+  if (cachedTenantId && Date.now() - tenantDiscoverAt < TENANT_TTL_MS) return cachedTenantId;
+  const candidates = [];
+  if (deviceIdHint) candidates.push(`${NRF_HOST}/v1/devices/${encodeURIComponent(deviceIdHint)}`);
+  candidates.push(`${NRF_HOST}/v1/devices?pageLimit=1`);
+  for (const url of candidates) {
+    try {
+      const { response, data } = await upstreamFetch(url, 'GET', auth, undefined, 'NRF tenant-discover', { tryBearerFallback: true });
+      if (!response.ok || !data) continue;
+      const items = Array.isArray(data) ? data : (data.items || data.data || [data]);
+      for (const it of items) {
+        const tid = it?.tenantId || it?.tenant_id || it?.$meta?.tenantId;
+        if (tid && /^[0-9a-fA-F-]{8,}$/.test(String(tid))) {
+          cachedTenantId = String(tid);
+          tenantDiscoverAt = Date.now();
+          console.log(`[Proxy] tenantId cached len=${cachedTenantId.length} prefix=${cachedTenantId.slice(0, 8)}`);
+          return cachedTenantId;
+        }
+      }
+    } catch (e) {
+      console.log('[Proxy] tenant-discover soft fail:', e.message || e);
+    }
+  }
+  return cachedTenantId;
+}
+
+async function resolveWifiLocation(serial, auth, org, project, { tenantId = null, deviceId = null, authCandidates = null } = {}) {
+  if (!serial || serial.lat != null) return serial;
+  const aps = usableWifiAps(serial);
+  if (aps.length < 2) return serial;
+
+  const key = wifiResolveKey(aps);
+  const hit = wifiResolveCache.get(key);
+  if (hit && Date.now() - hit.at < WIFI_RESOLVE_TTL_MS) {
+    return {
+      ...serial,
+      lat: hit.lat,
+      lon: hit.lon,
+      locationAccuracy: hit.uncertainty,
+      locationSource: hit.fulfilledWith ? `wifi_${String(hit.fulfilledWith).toLowerCase()}` : 'wifi',
+      wifiApCount: aps.length,
+    };
+  }
+
+  // Docs: Wi-Fi Location Services wants OAT Bearer. Team Simple Token often 401s on /wifi
+  // while still working for /cell — try OAT/memfault auth first, then team key.
+  const auths = [];
+  for (const a of (authCandidates || [auth])) {
+    if (a && !auths.includes(a)) auths.push(a);
+  }
+  if (!auths.length) return serial;
+
+  const url = `${NRF_HOST}/v1/organizations/${encodeURIComponent(org)}/projects/${encodeURIComponent(project)}/location/wifi`;
+  const body = JSON.stringify({ accessPoints: aps });
+  let tenant = (tenantId || cachedTenantId || '').trim() || null;
+  if (!tenant) tenant = await discoverTenantId(auths[0], deviceId);
+
+  const headerAttempts = [];
+  if (tenant) headerAttempts.push({ label: 'with-tenant', headers: { 'x-nrfcloud-tenantid': tenant } });
+  headerAttempts.push({ label: 'no-tenant', headers: null });
+
+  for (let ai = 0; ai < auths.length; ai++) {
+    const a = auths[ai];
+    const authKind = /^Bearer/i.test(a) ? 'Bearer' : (/^Basic/i.test(a) ? 'Basic' : 'Auth');
+    for (const attempt of headerAttempts) {
+      try {
+        const { response, data } = await upstreamFetch(
+          url,
+          'POST',
+          a,
+          body,
+          `NRF location-wifi (${attempt.label}, ${authKind}, ${aps.length} APs)`,
+          { tryBearerFallback: true, extraHeaders: attempt.headers },
+        );
+        const snippet = typeof data === 'object' && data ? JSON.stringify(data).slice(0, 180) : String(data || '').slice(0, 180);
+        if (response.ok && data && data.lat != null && data.lon != null) {
+          const entry = {
+            lat: Number(data.lat),
+            lon: Number(data.lon),
+            uncertainty: data.uncertainty != null ? Number(data.uncertainty) : undefined,
+            fulfilledWith: data.fulfilledWith || 'WIFI',
+            at: Date.now(),
+          };
+          wifiResolveCache.set(key, entry);
+          console.log(`[Proxy] wifi-resolve OK ${aps.length}APs → ${entry.lat.toFixed(5)},${entry.lon.toFixed(5)} (${entry.fulfilledWith}, ${attempt.label}, ${authKind})`);
+          return {
+            ...serial,
+            lat: entry.lat,
+            lon: entry.lon,
+            locationAccuracy: entry.uncertainty,
+            locationSource: `wifi_${String(entry.fulfilledWith).toLowerCase()}`,
+            wifiApCount: aps.length,
+          };
+        }
+        console.log(`[Proxy] wifi-resolve ${response.status} (${attempt.label}, ${authKind}): ${snippet}`);
+        if (!tenant && (response.status === 400 || response.status === 403 || response.status === 422)) {
+          tenant = await discoverTenantId(a, deviceId);
+          if (tenant && !headerAttempts.some((h) => h.label === 'with-tenant-retry')) {
+            headerAttempts.push({ label: 'with-tenant-retry', headers: { 'x-nrfcloud-tenantid': tenant } });
+          }
+        }
+      } catch (e) {
+        console.log(`[Proxy] wifi-resolve error (${attempt.label}, ${authKind}):`, e.message || e);
+      }
+    }
+  }
+  return serial;
 }
 
 async function resolveSerialCellLocation(serial, auth, org, project) {
@@ -155,13 +306,51 @@ async function resolveSerialCellLocation(serial, auth, org, project) {
   return serial;
 }
 
-async function mergeSerialIntoMessages(data, status, reqUrl, auth, org, project) {
+/** Prefer Wi-Fi (≥2 usable APs) then SCELL fallback. */
+async function enrichSerialLocation(serial, auth, org, project, opts = {}) {
+  const candidates = [];
+  for (const a of (opts.authCandidates || [auth])) {
+    if (a && !candidates.includes(a)) candidates.push(a);
+  }
+  if (!serial || !candidates.length) return serial;
+  if (serial.lat != null && serial.lon != null) return serial;
+  const tenantHdr = (opts.tenantId || '').trim() || null;
+  if (tenantHdr) {
+    cachedTenantId = tenantHdr;
+    tenantDiscoverAt = Date.now();
+  }
+  let out = serial;
+  const aps = usableWifiAps(out);
+  if (aps.length >= 2) {
+    out = await resolveWifiLocation(out, candidates[0], org, project, {
+      tenantId: tenantHdr || cachedTenantId,
+      deviceId: opts.deviceId || null,
+      authCandidates: candidates,
+    });
+  }
+  if (out.lat == null) {
+    // Cell accepts team Simple Token; try each candidate until one works
+    for (const a of candidates) {
+      out = await resolveSerialCellLocation(out, a, org, project);
+      if (out.lat != null) break;
+    }
+  }
+  return out;
+}
+
+async function mergeSerialIntoMessages(data, status, reqUrl, auth, org, project, memfaultAuth = null) {
   let serial = readSerialTelemetry();
   if (!serial) return { data, status, serial: null };
-  serial = await resolveSerialCellLocation(serial, auth, org || DEFAULT_ORG, project || DEFAULT_PROJECT);
-
   const u = new URL(reqUrl, 'http://local');
   const deviceId = u.searchParams.get('deviceId') || undefined;
+  const candidates = [];
+  // OAT/Memfault first for Wi-Fi LS; team key second (works for SCELL)
+  if (memfaultAuth) candidates.push(memfaultAuth);
+  if (auth && !candidates.includes(auth)) candidates.push(auth);
+  serial = await enrichSerialLocation(serial, candidates[0] || auth, org || DEFAULT_ORG, project || DEFAULT_PROJECT, {
+    deviceId,
+    authCandidates: candidates,
+  });
   const soft = softMessagesFromSerial(serial, deviceId);
 
   // 401/403 or empty → synthesize soft messages so UI still paints sensors
@@ -315,14 +504,21 @@ function resolveAuth(req) {
 }
 
 /** Simple Token (team API key) for ListMessages / location / FetchDevice — not OAT */
+let _loggedTeamKey = false;
 function resolveNrfAuth(req, memfaultAuth) {
   const team = (req.headers['x-nrf-team-key'] || '').trim().replace(/^(Bearer)\s+/i, '');
   if (team) {
-    const hex = /^[0-9a-fA-F]{32,64}$/.test(team);
-    console.log(`[Proxy] X-Nrf-Team-Key len=${team.length} hex=${hex} prefix=${team.slice(0, 4)}`);
+    if (!_loggedTeamKey) {
+      const hex = /^[0-9a-fA-F]{32,64}$/.test(team);
+      console.log(`[Proxy] X-Nrf-Team-Key len=${team.length} hex=${hex} prefix=${team.slice(0, 4)}`);
+      _loggedTeamKey = true;
+    }
     return `Bearer ${team}`;
   }
-  console.log('[Proxy] X-Nrf-Team-Key missing — msgs will use Memfault auth (likely 401)');
+  if (!_loggedTeamKey) {
+    console.log('[Proxy] X-Nrf-Team-Key missing — msgs will use Memfault auth (likely 401)');
+    _loggedTeamKey = true;
+  }
   return memfaultAuth;
 }
 
@@ -538,7 +734,7 @@ function mapPath(reqPath, org, project) {
   return null;
 }
 
-async function upstreamFetch(url, method, auth, body, label, { tryBearerFallback = false } = {}) {
+async function upstreamFetch(url, method, auth, body, label, { tryBearerFallback = false, extraHeaders = null } = {}) {
   const variants = tryBearerFallback ? authVariants(auth) : [auth];
   let last = null;
   for (let i = 0; i < variants.length; i++) {
@@ -548,6 +744,11 @@ async function upstreamFetch(url, method, auth, body, label, { tryBearerFallback
       Accept: 'application/json',
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (extraHeaders && typeof extraHeaders === 'object') {
+      for (const [hk, hv] of Object.entries(extraHeaders)) {
+        if (hv != null && hv !== '') headers[hk] = hv;
+      }
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
@@ -616,6 +817,11 @@ async function enrichDevice(memfaultAuth, nrfAuth, org, project, deviceId, memfa
     extras.nrfState = nrfRaw.state || nrfRaw;
     extras.nrfFirmware = nrfRaw.firmware?.app?.version;
     extras.nrfFirmwareObj = nrfRaw.firmware;
+    const tid = nrfRaw.tenantId || nrfRaw.tenant_id;
+    if (tid && /^[0-9a-fA-F-]{8,}$/.test(String(tid))) {
+      cachedTenantId = String(tid);
+      tenantDiscoverAt = Date.now();
+    }
   }
 
   return normalizeDevice(memfaultRaw, extras);
@@ -632,9 +838,22 @@ app.get('/api/serial/telemetry', async (req, res) => {
     });
   }
   const auth = resolveAuth(req);
+  const nrfAuth = resolveNrfAuth(req, auth);
   const org = (req.headers['x-memfault-org'] || req.headers['x-org-slug'] || DEFAULT_ORG).toString().trim() || DEFAULT_ORG;
   const project = (req.headers['x-memfault-project'] || req.headers['x-project-slug'] || DEFAULT_PROJECT).toString().trim() || DEFAULT_PROJECT;
-  if (auth) serial = await resolveSerialCellLocation(serial, auth, org, project);
+  const tenantHdr = (req.headers['x-nrfcloud-tenantid'] || req.headers['x-nrf-tenant-id'] || '').toString().trim() || null;
+  const deviceId = (req.query.deviceId || req.headers['x-device-id'] || '').toString().trim() || null;
+  if (auth || nrfAuth) {
+    // Prefer Memfault/OAT first for /location/wifi (team Simple Token often 401s there)
+    const candidates = [];
+    if (auth) candidates.push(auth);
+    if (nrfAuth && nrfAuth !== auth) candidates.push(nrfAuth);
+    serial = await enrichSerialLocation(serial, candidates[0], org, project, {
+      tenantId: tenantHdr,
+      deviceId,
+      authCandidates: candidates,
+    });
+  }
   res.set('Cache-Control', 'no-store');
   res.json(serial);
 });
@@ -762,7 +981,7 @@ app.use('/api', async (req, res) => {
     }
 
     if (mapped.kind === 'nrf-messages') {
-      const merged = await mergeSerialIntoMessages(out, statusOut, req.url, nrfAuth || auth, org, project);
+      const merged = await mergeSerialIntoMessages(out, statusOut, req.url, nrfAuth || auth, org, project, auth);
       out = merged.data;
       statusOut = merged.status;
       if (merged.serial) res.set('X-Proxy-Serial', merged.serial.ok ? 'ok' : 'stale');

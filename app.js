@@ -37,7 +37,7 @@ const elements = {
     connectionStatus: $('connectionStatus'), connLabel: $('connLabel'),
     deviceId: $('deviceId'), deviceName: $('deviceName'), firmwareVersion: $('firmwareVersion'), lastSeen: $('lastSeen'),
     deviceSelect: $('deviceSelect'), refreshFleet: $('refreshFleet'), fleetCount: $('fleetCount'), fleetGrid: $('fleetGrid'), pollFleet: $('pollFleet'),
-    gpsCoords: $('gpsCoords'), gpsLat: $('gpsLat'), gpsLon: $('gpsLon'), gpsAcc: $('gpsAcc'), gpsSats: $('gpsSats'), gpsAlt: $('gpsAlt'), gpsSpeed: $('gpsSpeed'),
+    gpsCoords: $('gpsCoords'), gpsSourceBadge: $('gpsSourceBadge'), gpsLat: $('gpsLat'), gpsLon: $('gpsLon'), gpsAcc: $('gpsAcc'), gpsSats: $('gpsSats'), gpsAlt: $('gpsAlt'), gpsSpeed: $('gpsSpeed'),
     tempValue: $('tempValue'), humValue: $('humValue'), pressValue: $('pressValue'),
     accelX: $('accelX'), accelY: $('accelY'), accelZ: $('accelZ'), steps: $('steps'),
     batteryFill: $('batteryFill'), batteryValue: $('batteryValue'), batteryVoltage: $('batteryVoltage'), batteryCharging: $('batteryCharging'),
@@ -198,7 +198,9 @@ async function fetchSerialTelemetry() {
             if (config.email) h['X-User-Email'] = config.email;
             if (config.teamApiKey) h['X-Nrf-Team-Key'] = config.teamApiKey;
         }
-        const res = await fetch(`${base}/api/serial/telemetry`, { cache: 'no-store', headers: h });
+        if (config.deviceId) h['X-Device-Id'] = config.deviceId;
+        const q = config.deviceId ? `?deviceId=${encodeURIComponent(config.deviceId)}` : '';
+        const res = await fetch(`${base}/api/serial/telemetry${q}`, { cache: 'no-store', headers: h });
         if (!res.ok) return null;
         const data = await res.json();
         lastSerial = data;
@@ -208,7 +210,13 @@ async function fetchSerialTelemetry() {
     }
 }
 function applySerialOverlay(fromMsg, parsed, serial) {
-    if (!serial || !serial.ok) return { fromMsg, parsed, used: false };
+    if (!serial) return { fromMsg, parsed, used: false };
+    const hasFix = serial.lat != null && serial.lon != null;
+    const hasNet = serial.mcc != null || serial.mccMnc != null || serial.rsrp != null || serial.operator;
+    const hasEnv = serial.temperatureC != null || serial.humidityPct != null || serial.batteryMv != null;
+    const hasWifi = Array.isArray(serial.wifiAps) && serial.wifiAps.length > 0;
+    // Allow resolved lat/lon (wifi/cell) even when USB briefly drops (ok=false)
+    if (!serial.ok && !hasFix && !hasNet && !hasEnv && !hasWifi) return { fromMsg, parsed, used: false };
     const fm = { ...fromMsg, gps: { ...(fromMsg.gps || {}) } };
     let used = false;
     let p = { ...parsed };
@@ -243,6 +251,7 @@ function applySerialOverlay(fromMsg, parsed, serial) {
     take('cellId', serial.cellId || serial.eciDec || serial.eci);
     take('wifiApCount', serial.wifiApCount);
     take('wifiStatus', serial.wifiStatus);
+    if (Array.isArray(serial.wifiAps) && serial.wifiAps.length) { p.wifiAps = serial.wifiAps; used = true; }
     if (serial.operator || serial.mccMnc || serial.band != null || serial.rsrp != null || serial.ipAddress)
         telemetrySource.net = telemetrySource.net || 'serial';
     else if (p.operator || p.mccMnc) telemetrySource.net = telemetrySource.net || 'cloud';
@@ -252,9 +261,17 @@ function applySerialOverlay(fromMsg, parsed, serial) {
         if (h) p.operator = h;
     }
     if ((fm.gps?.lat == null || fm.gps?.lon == null) && serial.lat != null && serial.lon != null) {
-        fm.gps = { lat: Number(serial.lat), lon: Number(serial.lon), accuracy: serial.locationAccuracy != null ? Number(serial.locationAccuracy) : undefined };
+        fm.gps = {
+            lat: Number(serial.lat),
+            lon: Number(serial.lon),
+            accuracy: serial.locationAccuracy != null ? Number(serial.locationAccuracy) : undefined,
+            source: serial.locationSource || 'serial',
+        };
         telemetrySource.gps = 'serial'; used = true;
-    } else if (fm.gps?.lat != null) telemetrySource.gps = telemetrySource.gps || 'cloud';
+    } else if (fm.gps?.lat != null) {
+        telemetrySource.gps = telemetrySource.gps || 'cloud';
+        if (!fm.gps.source && serial?.locationSource) fm.gps.source = serial.locationSource;
+    }
     return { fromMsg: fm, parsed: p, used };
 }
 function updateSourceBadge() {
@@ -480,6 +497,31 @@ function parseDevice(d) {
     };
 }
 
+
+function locationSourceLabel(src) {
+    const s = String(src || '').toLowerCase();
+    if (!s) return null;
+    if (s.startsWith('wifi') || s === 'wifi') return { text: 'Wi‑Fi', cls: 'src-wifi' };
+    if (s.startsWith('cell') || s.includes('scell') || s.includes('mcell')) return { text: 'Célula', cls: 'src-cell' };
+    if (s.includes('gnss') || s.includes('gps') || s === 'uart' || s === 'serial') return { text: 'GNSS', cls: 'src-gnss' };
+    if (s.includes('cloud')) return { text: 'Célula', cls: 'src-cell' };
+    return { text: s.slice(0, 12), cls: 'src-gnss' };
+}
+function setGpsSourceBadge(src) {
+    const el = elements.gpsSourceBadge;
+    if (!el) return;
+    const info = locationSourceLabel(src);
+    if (!info) {
+        el.hidden = true;
+        el.textContent = '—';
+        el.className = 'loc-source-badge';
+        return;
+    }
+    el.hidden = false;
+    el.textContent = info.text;
+    el.className = `loc-source-badge ${info.cls}`;
+}
+
 /* ---------- UI ---------- */
 function updateUI(parsed, fromMsg) {
     setText(elements.deviceId, parsed.id || config.deviceId || '-');
@@ -490,6 +532,7 @@ function updateUI(parsed, fromMsg) {
     const gps = { ...fromMsg.gps };
     if (gps.lat != null && gps.lon != null) {
         setText(elements.gpsCoords, `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}`);
+        setGpsSourceBadge(gps.source || lastSerial?.locationSource || telemetrySource.gps);
         setText(elements.gpsLat, gps.lat.toFixed(6)); setText(elements.gpsLon, gps.lon.toFixed(6));
         setText(elements.gpsAcc, gps.accuracy != null ? `${Math.round(gps.accuracy)} m` : '—');
         setText(elements.gpsAlt, gps.altitude != null ? `${Math.round(gps.altitude)} m` : '—');
@@ -668,15 +711,19 @@ async function fetchAndUpdate() {
         const hasGps = fromMsg.gps?.lat != null && fromMsg.gps?.lon != null;
         // Posição headline: calm/actionable; avoid scary Simple Token nag when serial healthy
         if (!hasGps) {
+            setGpsSourceBadge(null);
             const src = ser?.locationSource || '';
-            if (healthy && (src === 'cloud_pending' || /loc_cloud|pending/i.test(ser?.rawNotes || ''))) {
-                setText(elements.gpsCoords, 'Sem fix — pedido Wi‑Fi/célula na nuvem (ainda sem coordenadas).');
-            } else if (healthy) {
-                setText(elements.gpsCoords, 'Sem fix — Wi‑Fi/GNSS ainda sem coordenadas. Próximo: céu aberto ou Simple Token.');
-            } else if (!config.teamApiKey) {
-                setText(elements.gpsCoords, 'Sem msgs (401): cole API Key da equipe (Simple Token)');
+            const aps = Array.isArray(ser?.wifiAps) ? ser.wifiAps.length : (ser?.wifiApCount || 0);
+            if (!healthy) {
+                setText(elements.gpsCoords, 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
+            } else if (src === 'cloud_pending' || /loc_cloud|pending/i.test(ser?.rawNotes || '')) {
+                setText(elements.gpsCoords, 'Sem fix — pedido Wi‑Fi/célula na nuvem (ainda sem coordenadas)');
+            } else if (aps >= 2) {
+                setText(elements.gpsCoords, 'Sem fix — resolvendo Wi‑Fi…');
+            } else if (ser?.mcc != null && (ser?.eciDec != null || ser?.tacDec != null)) {
+                setText(elements.gpsCoords, 'Sem fix — resolvendo célula…');
             } else {
-                setText(elements.gpsCoords, 'Aguardando GPS…');
+                setText(elements.gpsCoords, 'Sem fix — aguarde scan Wi‑Fi/célula ou céu aberto (GNSS)');
             }
         }
         if (lastConnected !== null && lastConnected !== parsed.connected)

@@ -414,3 +414,22 @@ header h1 {
 @media (min-width: 520px) {
     .card-network .net-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* location source badge next to Posição */
+.coords-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.loc-source-badge {
+  display: inline-block;
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.22);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+}
+.loc-source-badge[hidden] { display: none !important; }
+.loc-source-badge.src-wifi { background: #00b894; border-color: transparent; }
+.loc-source-badge.src-cell { background: #0984e3; border-color: transparent; }
+.loc-source-badge.src-gnss { background: #6c5ce7; border-color: transparent; }
