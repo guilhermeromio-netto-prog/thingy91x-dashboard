@@ -45,6 +45,27 @@ function resolvePollMs() {
 }
 const POLL_MS = resolvePollMs();
 let lastConnected = null, lastSeenTs = null, lastBatteryPct = null;
+let lastGpsFix = null; // { lat, lon, at }
+let lastBatteryAt = null;
+let lastIntelAlerts = [];
+/** Thresholds for remote intelligence (v25) — tunable constants. */
+const INTEL = {
+    OFFLINE_STALE_MS: 20 * 60 * 1000,   // lastSeen >20min → offline stale
+    DATA_STALE_MS: 30 * 60 * 1000,      // gps/net age
+    BATTERY_LOW: 20,
+    BATTERY_CRIT: 10,
+    RSRP_WEAK: -110,
+    TRAIL_SPARSE_HOURS: 6,
+    TRAIL_SPARSE_MIN_PTS: 3,
+    BAT_MIN_SAMPLES: 4,
+    BAT_MIN_SPAN_MS: 2 * 3600 * 1000,   // 2h
+    MOVE_SPEED_KMH: 1.5,
+    MOVE_DISP_M: 40,
+    MOVE_WINDOW_MS: 20 * 60 * 1000,
+    STOP_MIN_MS: 10 * 60 * 1000,
+    STOP_RADIUS_M: 50,
+    ALERTS_MAX: 5,
+};
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
 let trailFailLogged = false, lastTrailFitCount = 0;
 const LOCAL_TRAIL_CAP = 2000;
@@ -85,6 +106,11 @@ const elements = {
     msgTable: $('msgTable'), exportCsv: $('exportCsv'), exportGeo: $('exportGeo'), exportShadow: $('exportShadow'),
     dataSourceBadge: $('dataSourceBadge'),
     copyDeviceId: $('copyDeviceId'), aliasEditBtn: $('aliasEditBtn'), situacaoLine: $('situacaoLine'),
+    situacaoBand: $('situacaoBand'), sitEstado: $('sitEstado'), sitOnde: $('sitOnde'),
+    sitRisco: $('sitRisco'), sitRiscoReason: $('sitRiscoReason'), sitAcao: $('sitAcao'),
+    sitAlertas: $('sitAlertas'), sitCellEstado: $('sitCellEstado'), sitCellOnde: $('sitCellOnde'),
+    sitCellRisco: $('sitCellRisco'), sitCellAcao: $('sitCellAcao'),
+    trailIntel: $('trailIntel'), batteryAutonomia: $('batteryAutonomia'),
     envAge: $('envAge'), batteryAge: $('batteryAge'), gpsAge: $('gpsAge'), netAge: $('netAge'),
     netEmptyHint: $('netEmptyHint'), motionEmptyHint: $('motionEmptyHint'),
     motionSpeedWrap: $('motionSpeedWrap'), motionSpeed: $('motionSpeed'),
@@ -183,7 +209,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=24#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=25#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -364,20 +390,370 @@ function normalizeBatteryFields(rawV, rawPct) {
     if (volts != null && pct == null) pct = voltToBatteryPct(volts);
     return { volts, pct };
 }
-function updateSituacaoLine({ alias, connected, batteryPct, trailPts } = {}) {
-    if (!elements.situacaoLine) return;
-    if (batteryPct != null) lastBatteryPct = batteryPct;
-    const pct = batteryPct != null ? batteryPct : lastBatteryPct;
-    const parts = [];
-    parts.push(alias || getDeviceAlias(config.deviceId, 'Asset Tracker'));
-    const conn = connected !== undefined ? connected : lastConnected;
-    if (conn === true) parts.push('ONLINE');
-    else if (conn === false) parts.push('OFFLINE');
-    else parts.push('…');
-    if (pct != null) parts.push(`bateria ${pct}%`);
-    const n = trailPts != null ? trailPts : (lastTrail?.length || 0);
-    parts.push(`trilha ${n} pts`);
-    elements.situacaoLine.textContent = parts.join(' · ');
+/* ---------- Inteligência remota v25 ---------- */
+function ageMs(ts) {
+    if (!ts) return null;
+    const t = new Date(ts).getTime();
+    if (!Number.isFinite(t)) return null;
+    return Date.now() - t;
+}
+function formatHoursLeft(h) {
+    if (h == null || !Number.isFinite(h) || h < 0) return null;
+    if (h < 1) return `~${Math.max(1, Math.round(h * 60))}min`;
+    if (h < 24) return `~${h < 10 ? h.toFixed(1) : Math.round(h)}h`;
+    return `~${(h / 24).toFixed(1)}d`;
+}
+function shortCoords(lat, lon) {
+    return `${Number(lat).toFixed(4)}, ${Number(lon).toFixed(4)}`;
+}
+/** Battery drain %/h from trail/local snapshots — never invents. */
+function estimateBatteryDrain(trailPts, currentPct) {
+    const pts = (trailPts || [])
+        .map(p => {
+            const at = p.at ? new Date(p.at).getTime() : NaN;
+            let pct = p.battery != null ? Number(p.battery) : voltToBatteryPct(p.batteryVoltage);
+            if (pct == null || !Number.isFinite(pct) || !Number.isFinite(at)) return null;
+            if (p.charging === true) return null; // skip charging samples
+            return { at, pct: Math.round(pct) };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.at - b.at);
+    // keep last ~48h
+    const cutoff = Date.now() - 48 * 3600 * 1000;
+    const recent = pts.filter(p => p.at >= cutoff);
+    if (recent.length < INTEL.BAT_MIN_SAMPLES) {
+        return { ok: false, reason: 'sem histórico suficiente' };
+    }
+    const first = recent[0], last = recent[recent.length - 1];
+    const span = last.at - first.at;
+    if (span < INTEL.BAT_MIN_SPAN_MS) {
+        return { ok: false, reason: 'sem histórico suficiente' };
+    }
+    const drop = first.pct - last.pct;
+    if (drop <= 0.5) {
+        // flat or charging overall — cannot estimate drain
+        return { ok: false, reason: 'sem histórico suficiente' };
+    }
+    const hours = span / 3600000;
+    const rate = drop / hours; // %/h
+    if (!Number.isFinite(rate) || rate <= 0.05) {
+        return { ok: false, reason: 'sem histórico suficiente' };
+    }
+    const pctNow = currentPct != null ? Number(currentPct) : last.pct;
+    const hoursLeft = pctNow / rate;
+    return {
+        ok: true,
+        ratePctPerHour: rate,
+        hoursLeft,
+        samples: recent.length,
+        spanHours: hours,
+    };
+}
+function updateBatteryAutonomia(est) {
+    const el = elements.batteryAutonomia;
+    if (!el) return;
+    el.classList.remove('has-estimate', 'warn');
+    if (!est || !est.ok) {
+        el.textContent = 'Autonomia estimada: sem histórico suficiente';
+        return;
+    }
+    const left = formatHoursLeft(est.hoursLeft);
+    const rate = est.ratePctPerHour < 1
+        ? `${est.ratePctPerHour.toFixed(2)}%/h`
+        : `${est.ratePctPerHour.toFixed(1)}%/h`;
+    el.textContent = `Autonomia estimada: ${left} restantes (${rate})`;
+    el.classList.add('has-estimate');
+    if (est.hoursLeft != null && est.hoursLeft < 6) el.classList.add('warn');
+}
+/** Today's trail distance/duration + motion + stops. */
+function computeTrailIntel(trailPts) {
+    const now = Date.now();
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const dayStart = startOfDay.getTime();
+    const pts = (trailPts || [])
+        .filter(p => p && p.lat != null && p.lon != null && p.at)
+        .map(p => ({ lat: Number(p.lat), lon: Number(p.lon), at: new Date(p.at).getTime() }))
+        .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.at))
+        .sort((a, b) => a.at - b.at);
+    const today = pts.filter(p => p.at >= dayStart);
+    let distM = 0;
+    for (let i = 1; i < today.length; i++) {
+        distM += haversine(today[i - 1].lat, today[i - 1].lon, today[i].lat, today[i].lon);
+    }
+    let durationMs = 0;
+    if (today.length >= 2) durationMs = today[today.length - 1].at - today[0].at;
+
+    // motion: last MOVE_WINDOW_MS
+    const win = pts.filter(p => p.at >= now - INTEL.MOVE_WINDOW_MS);
+    let moving = false;
+    let dispM = 0;
+    if (win.length >= 2) {
+        const a = win[0], b = win[win.length - 1];
+        dispM = haversine(a.lat, a.lon, b.lat, b.lon);
+        const hours = Math.max((b.at - a.at) / 3600000, 1 / 60);
+        const speedKmh = (dispM / 1000) / hours;
+        moving = dispM >= INTEL.MOVE_DISP_M || speedKmh >= INTEL.MOVE_SPEED_KMH;
+    } else if (win.length === 1 && pts.length >= 2) {
+        const prev = pts[pts.length - 2];
+        const cur = win[0];
+        dispM = haversine(prev.lat, prev.lon, cur.lat, cur.lon);
+        moving = dispM >= INTEL.MOVE_DISP_M;
+    }
+
+    // simple stop clusters: consecutive points within STOP_RADIUS staying >= STOP_MIN_MS
+    let stops = 0;
+    if (today.length >= 2) {
+        let clusterStart = 0;
+        for (let i = 1; i <= today.length; i++) {
+            const ended = i === today.length;
+            const far = !ended && haversine(
+                today[clusterStart].lat, today[clusterStart].lon,
+                today[i].lat, today[i].lon
+            ) > INTEL.STOP_RADIUS_M;
+            if (ended || far) {
+                const lastIdx = ended ? today.length - 1 : i - 1;
+                const dwell = today[lastIdx].at - today[clusterStart].at;
+                if (dwell >= INTEL.STOP_MIN_MS && lastIdx > clusterStart) stops += 1;
+                clusterStart = i;
+            }
+        }
+    }
+
+    return {
+        todayPts: today.length,
+        todayKm: distM / 1000,
+        todayDurationMs: durationMs,
+        moving,
+        stops,
+        winPts: win.length,
+        dispM,
+    };
+}
+function updateTrailIntelUi(intel) {
+    const el = elements.trailIntel;
+    if (!el) return;
+    if (!intel || intel.todayPts < 1) {
+        el.textContent = 'Resumo da trilha: sem pontos hoje';
+        return;
+    }
+    const km = intel.todayKm >= 10 ? intel.todayKm.toFixed(0) : intel.todayKm.toFixed(1);
+    let dur = '';
+    const ms = intel.todayDurationMs || 0;
+    if (ms >= 3600000) dur = ` · ${Math.round(ms / 3600000)}h`;
+    else if (ms >= 60000) dur = ` · ${Math.round(ms / 60000)}min`;
+    const mov = intel.moving ? 'em movimento' : 'parado';
+    const stopTxt = intel.stops > 0 ? ` · ${intel.stops} parada${intel.stops > 1 ? 's' : ''}` : '';
+    el.textContent = `Resumo da trilha: hoje ${km} km${dur} · ${mov}${stopTxt}`;
+}
+function computeOperationalAlerts({
+    connected, lastSeen, batteryPct, rsrp, gpsAt, netAt, trailPts, geoInsideNow, hasFix,
+} = {}) {
+    const alerts = [];
+    const push = (level, id, text) => alerts.push({ level, id, text });
+
+    if (!config.apiKey) {
+        push('atenção', 'no-key', 'Sem chave API — configure na engrenagem');
+        return alerts.slice(0, INTEL.ALERTS_MAX);
+    }
+
+    const seenAge = ageMs(lastSeen);
+    const offline = connected === false
+        || (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS);
+    if (connected === false) {
+        push('crítico', 'offline', 'Device offline');
+    } else if (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS) {
+        push('crítico', 'stale-seen', `Último visto ${timeAgo(lastSeen)}`);
+    }
+
+    const pct = batteryPct != null ? Number(batteryPct) : null;
+    if (pct != null && pct < INTEL.BATTERY_CRIT) {
+        push('crítico', 'bat-crit', `Bateria crítica (${pct}%)`);
+    } else if (pct != null && pct < INTEL.BATTERY_LOW) {
+        push('atenção', 'bat-low', `Bateria baixa (${pct}%)`);
+    }
+
+    if (geo && hasFix && geoInsideNow === false) {
+        push('crítico', 'geo-out', 'Fora da geofence');
+    }
+
+    // sparse trail while supposedly online (only if we already have some trail history)
+    if (connected === true && !offline) {
+        const since = Date.now() - INTEL.TRAIL_SPARSE_HOURS * 3600 * 1000;
+        const recent = (trailPts || []).filter(p => p.at && new Date(p.at).getTime() >= since);
+        const hasHistory = (trailPts || []).length >= INTEL.TRAIL_SPARSE_MIN_PTS;
+        if (hasHistory && recent.length < INTEL.TRAIL_SPARSE_MIN_PTS) {
+            push('atenção', 'trail-sparse', `Trilha esparsa (${recent.length} pts / ${INTEL.TRAIL_SPARSE_HOURS}h)`);
+        }
+    }
+
+    if (rsrp != null && Number(rsrp) < INTEL.RSRP_WEAK) {
+        push('atenção', 'rsrp-weak', `Sinal fraco (RSRP ${rsrp} dBm)`);
+    }
+
+    const gpsAge = ageMs(gpsAt);
+    if (hasFix && gpsAge != null && gpsAge > INTEL.DATA_STALE_MS) {
+        push('atenção', 'gps-stale', `Posição velha (${timeAgo(gpsAt)})`);
+    }
+    const netAge = ageMs(netAt);
+    if (netAt && netAge != null && netAge > INTEL.DATA_STALE_MS) {
+        push('atenção', 'net-stale', `Dado de rede velho (${timeAgo(netAt)})`);
+    }
+
+    // sort crítico first
+    const rank = { crítico: 0, atenção: 1, ok: 2 };
+    alerts.sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
+    return alerts.slice(0, INTEL.ALERTS_MAX);
+}
+function suggestAcao(alerts, ctx) {
+    const ids = new Set((alerts || []).map(a => a.id));
+    if (ids.has('no-key')) return 'Abrir engrenagem e colar a chave';
+    if (ids.has('geo-out')) return 'Verificar cerca / posição do asset';
+    if (ids.has('bat-crit')) return 'Recarregar agora';
+    if (ids.has('bat-low')) {
+        const h = ctx.hoursLeft;
+        if (h != null && Number.isFinite(h)) return `Recarregar em ${formatHoursLeft(h)}`;
+        return 'Planejar recarga em breve';
+    }
+    if (ids.has('offline') || ids.has('stale-seen')) return 'Aguardando LTE / checar cobertura';
+    if (ids.has('rsrp-weak')) return 'Checar antena / cobertura';
+    if (ids.has('gps-stale')) return 'Aguardar novo fix de posição';
+    if (ids.has('net-stale')) return 'Atualizar agora ou aguardar poll';
+    if (ids.has('trail-sparse')) return 'Aguardar pontos de trilha';
+    if (ctx.connected === true && !ctx.hasFix) return 'Aguardando fix de posição';
+    if (ctx.connected === true) return 'Monitorar — sem ação urgente';
+    return 'Configurar chave e aguardar poll';
+}
+function highestRisk(alerts) {
+    if (!alerts || !alerts.length) return { level: 'OK', reason: 'Nenhum alerta ativo' };
+    const top = alerts[0];
+    const label = top.level === 'crítico' ? 'Crítico' : top.level === 'atenção' ? 'Atenção' : 'OK';
+    return { level: label, reason: top.text, raw: top.level };
+}
+function renderSitAlertas(alerts) {
+    const ul = elements.sitAlertas;
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!alerts.length) {
+        const li = document.createElement('li');
+        li.className = 'lvl-ok';
+        li.textContent = 'Nenhum alerta';
+        ul.appendChild(li);
+        return;
+    }
+    for (const a of alerts) {
+        const li = document.createElement('li');
+        li.className = `lvl-${a.level}`;
+        li.textContent = a.text;
+        ul.appendChild(li);
+    }
+}
+function updateSituacaoInteligente(opts = {}) {
+    if (opts.batteryPct != null) lastBatteryPct = opts.batteryPct;
+    if (opts.connected !== undefined) lastConnected = opts.connected;
+    if (opts.lastSeen) lastSeenTs = opts.lastSeen;
+    if (opts.gps && opts.gps.lat != null && opts.gps.lon != null) {
+        lastGpsFix = {
+            lat: Number(opts.gps.lat),
+            lon: Number(opts.gps.lon),
+            at: opts.gpsAt || opts.lastSeen || lastGpsFix?.at || null,
+        };
+    }
+
+    const connected = opts.connected !== undefined ? opts.connected : lastConnected;
+    const pct = opts.batteryPct != null ? opts.batteryPct : lastBatteryPct;
+    const lastSeen = opts.lastSeen || lastSeenTs;
+    const rsrp = opts.rsrp != null ? opts.rsrp : null;
+    let trailPts = opts.trailPts != null ? opts.trailPts : lastTrail;
+    if (!Array.isArray(trailPts)) trailPts = lastTrail || [];
+    const hasFix = !!(lastGpsFix && lastGpsFix.lat != null);
+    const gpsAt = lastGpsFix?.at || opts.gpsAt || null;
+    const netAt = opts.netAt || lastNetPayloadAt || null;
+
+    // Estado
+    let estado = '…';
+    let estadoCls = '';
+    if (!config.apiKey) {
+        estado = 'Sem chave';
+        estadoCls = 'estado-sem-chave';
+    } else if (connected === true) {
+        const seenAge = ageMs(lastSeen);
+        if (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS) {
+            estado = 'Offline';
+            estadoCls = 'estado-offline';
+        } else {
+            estado = 'Online';
+            estadoCls = 'estado-online';
+        }
+    } else if (connected === false) {
+        estado = 'Offline';
+        estadoCls = 'estado-offline';
+    } else {
+        estado = '…';
+    }
+    setText(elements.sitEstado, estado);
+    if (elements.sitCellEstado) {
+        elements.sitCellEstado.className = `sit-cell ${estadoCls}`.trim();
+    }
+
+    // Onde
+    let onde = 'sem fix';
+    if (hasFix) {
+        onde = shortCoords(lastGpsFix.lat, lastGpsFix.lon);
+        if (geo) {
+            const dist = haversine(geo.lat, geo.lon, lastGpsFix.lat, lastGpsFix.lon);
+            const inside = dist <= geo.radius;
+            onde += inside ? ' · DENTRO' : ' · FORA';
+        }
+    } else if (geo) {
+        onde = 'sem fix · cerca ativa';
+    }
+    setText(elements.sitOnde, onde);
+
+    // Geofence flag for alerts
+    let geoInsideNow = null;
+    if (geo && hasFix) {
+        geoInsideNow = haversine(geo.lat, geo.lon, lastGpsFix.lat, lastGpsFix.lon) <= geo.radius;
+    }
+
+    const batEst = estimateBatteryDrain(trailPts, pct);
+    updateBatteryAutonomia(batEst);
+
+    const trailIntel = computeTrailIntel(trailPts);
+    updateTrailIntelUi(trailIntel);
+
+    const alerts = computeOperationalAlerts({
+        connected, lastSeen, batteryPct: pct, rsrp,
+        gpsAt, netAt, trailPts, geoInsideNow, hasFix,
+    });
+    lastIntelAlerts = alerts;
+    renderSitAlertas(alerts);
+
+    const risk = highestRisk(alerts);
+    setText(elements.sitRisco, risk.level);
+    setText(elements.sitRiscoReason, risk.reason || '');
+    if (elements.sitCellRisco) {
+        const cls = risk.raw === 'crítico' ? 'risk-critico'
+            : risk.raw === 'atenção' ? 'risk-atencao' : 'risk-ok';
+        elements.sitCellRisco.className = `sit-cell ${cls}`;
+    }
+
+    const acao = suggestAcao(alerts, {
+        connected,
+        hasFix,
+        hoursLeft: batEst.ok ? batEst.hoursLeft : null,
+    });
+    setText(elements.sitAcao, acao);
+
+    // keep legacy one-liner hidden but updated for any old refs
+    if (elements.situacaoLine) {
+        const alias = opts.alias || getDeviceAlias(config.deviceId, 'Asset Tracker');
+        elements.situacaoLine.textContent = `${alias} · ${estado} · ${risk.level}`;
+    }
+}
+/** @deprecated use updateSituacaoInteligente */
+function updateSituacaoLine(opts = {}) {
+    updateSituacaoInteligente(opts);
 }
 function refreshGeofenceUi(lat, lon) {
     if (!geo) {
@@ -1186,6 +1562,7 @@ function updateUI(parsed, fromMsg) {
         setText(elements.gpsSpeed, spd != null ? `${spd.toFixed(1)} m/s` : '—');
         updateMap(gps.lat, gps.lon, gps.accuracy);
         refreshGeofenceUi(gps.lat, gps.lon);
+        lastGpsFix = { lat: Number(gps.lat), lon: Number(gps.lon), at: gpsTs || null };
     } else {
         refreshGeofenceUi(null, null);
     }
@@ -1328,11 +1705,17 @@ function updateUI(parsed, fromMsg) {
     if (hasCellFields && netTs) lastNetPayloadAt = netTs;
     updateConnectivityStrip({ connected: parsed.connected, parsed, fromMsg });
 
-    updateSituacaoLine({
+    lastBatteryAt = batTs || lastBatteryAt;
+    updateSituacaoInteligente({
         alias,
         connected: parsed.connected,
         batteryPct: batPct,
-        trailPts: lastTrail?.length || 0,
+        lastSeen: ls || lastSeenTs,
+        rsrp,
+        gpsAt: gps.lat != null ? gpsTs : (lastGpsFix?.at || null),
+        netAt: hasCellFields ? netTs : lastNetPayloadAt,
+        trailPts: lastTrail,
+        gps: gps.lat != null ? gps : null,
     });
 }
 
@@ -1800,6 +2183,8 @@ function applyTrailPoints(points) {
             lastTrailFitCount = latlngs.length;
         } catch { /* bounds invalid */ }
     }
+    // Refresh autonomia / resumo / alertas that depend on trail
+    updateSituacaoInteligente({ trailPts: deduped });
     return deduped;
 }
 function applyPositionFromPoint(pt, srcLabel) {
@@ -1812,6 +2197,7 @@ function applyPositionFromPoint(pt, srcLabel) {
     setGpsSourceBadge(srcLabel || pt.serviceType || pt.src || 'trail');
     updateMap(lat, lon, pt.unc, { skipZoom: (lastTrail.length >= 2), appendTrail: false });
     checkGeofence(lat, lon);
+    lastGpsFix = { lat, lon, at: pt.at || lastGpsFix?.at || null };
     return true;
 }
 
@@ -1850,6 +2236,7 @@ async function fetchAndUpdate(opts = {}) {
         updateAuthBanner();
         setStatus(false, 'Sem chave');
         updateConnectivityStrip({ connected: null, parsed: {}, fromMsg: {} });
+        updateSituacaoInteligente({ connected: null });
         showModal();
         return;
     }
@@ -2021,11 +2408,10 @@ async function loadTrail(opts = {}) {
         const lon = last?.lon ?? marker?.getLatLng()?.lng;
         refreshGeofenceUi(lat, lon);
     } catch { refreshGeofenceUi(null, null); }
-    updateSituacaoLine({
+    updateSituacaoInteligente({
         alias: getDeviceAlias(config.deviceId),
         connected: lastConnected,
-        batteryPct: null,
-        trailPts: applied.length,
+        trailPts: applied,
     });
     if (!quiet) {
         if (applied.length) log('ok', `Trilha: ${applied.length} pts · ${trailDistanceKm(applied).toFixed(1)} km [${sts.join(',') || '?'}]`);
@@ -2041,10 +2427,12 @@ function init() {
     if (!config.apiKey) {
         setStatus(false, 'Sem chave');
         updateConnectivityStrip({ connected: null, parsed: {}, fromMsg: {} });
+        updateSituacaoInteligente({ connected: null });
         showModal();
         log('warn', 'Sem User API Key / OAT');
         return;
     }
+    updateSituacaoInteligente({});
     if (!config.email) log('info', 'Sem e-mail — usando Bearer (OAT) no Memfault.');
     if (!config.teamApiKey) log('warn', 'Sem API Key da equipe — GPS/sensores (ListMessages) vão dar 401.');
     initMap(); fetchAndUpdate(); loadTrail();
@@ -2116,13 +2504,16 @@ elements.geoSet?.addEventListener('click', () => {
         localStorage.setItem('thingy_geo', JSON.stringify(geo));
         restoreGeofence();
         refreshGeofenceUi(p.lat, p.lng);
+        updateSituacaoInteligente({});
         log('ok', 'Geofence definido', `${geo.lat},${geo.lon} r=${geo.radius}m`);
     } catch { log('warn', 'Sem posição para geofence'); }
 });
 elements.geoClear?.addEventListener('click', () => {
     geo = null; localStorage.removeItem('thingy_geo');
     if (geoCircle && map) map.removeLayer(geoCircle); geoCircle = null;
-    setText(elements.geoState, 'Sem cerca definida.'); if (elements.geoState) elements.geoState.style.color = ''; log('info', 'Geofence limpo');
+    setText(elements.geoState, 'Sem cerca definida.'); if (elements.geoState) elements.geoState.style.color = '';
+    updateSituacaoInteligente({});
+    log('info', 'Geofence limpo');
 });
 if (elements.geoRadius && geo) elements.geoRadius.value = geo.radius;
 if (geo && elements.geoState) setText(elements.geoState, 'Cerca ativa — aguardando fix.');
@@ -2213,10 +2604,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=24', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=25', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v23';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v24').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v25';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v25').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

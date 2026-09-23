@@ -20,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=24">
+    <link rel="stylesheet" href="styles.css?v=25">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -53,7 +53,32 @@
                             <h1 id="deviceName" class="alias-display" title="Clique para editar o nome operacional" contenteditable="true" spellcheck="false">Asset Tracker</h1>
                             <button type="button" class="btn btn-ghost btn-sm alias-edit-btn" id="aliasEditBtn" title="Editar nome operacional" aria-label="Editar nome">✎</button>
                         </div>
-                        <p class="situacao-line" id="situacaoLine" title="Resumo rápido">—</p>
+                        <section class="situacao-band" id="situacaoBand" aria-label="Situação inteligente">
+                            <div class="situacao-grid">
+                                <div class="sit-cell" id="sitCellEstado">
+                                    <span class="sit-label">Estado</span>
+                                    <span class="sit-value" id="sitEstado">—</span>
+                                </div>
+                                <div class="sit-cell" id="sitCellOnde">
+                                    <span class="sit-label">Onde</span>
+                                    <span class="sit-value" id="sitOnde">—</span>
+                                </div>
+                                <div class="sit-cell" id="sitCellRisco">
+                                    <span class="sit-label">Risco</span>
+                                    <span class="sit-value" id="sitRisco">—</span>
+                                    <span class="sit-reason" id="sitRiscoReason"></span>
+                                </div>
+                                <div class="sit-cell sit-cell-acao" id="sitCellAcao">
+                                    <span class="sit-label">Ação</span>
+                                    <span class="sit-value" id="sitAcao">—</span>
+                                </div>
+                            </div>
+                            <div class="sit-alertas-wrap">
+                                <span class="sit-alertas-title">Alertas</span>
+                                <ul class="sit-alertas" id="sitAlertas" aria-label="Alertas operacionais"></ul>
+                            </div>
+                        </section>
+                        <p class="situacao-line" id="situacaoLine" hidden title="legado">—</p>
                         <div class="fleet-row">
                             <select id="deviceSelect" aria-label="Selecionar dispositivo"></select>
                             <button class="btn btn-ghost btn-sm" id="refreshFleet">↻ Frota</button>
@@ -99,6 +124,7 @@
                                 <option value="2160">90d</option>
                             </select>
                             <span id="trailPoints" class="trail-points" title="Pontos da trilha (nuvem + local)">Trilha ON · 0 pts · 0 km</span>
+                            <span id="trailIntel" class="trail-intel" title="Resumo da trilha (hoje)">Resumo da trilha: —</span>
                             <span class="trail-hint" title="Cada ponto guarda o estado do device naquele minuto">Clique num ponto da trilha</span>
                         </div>
                     </div>
@@ -177,6 +203,7 @@
                             <span id="batteryVoltage">—</span>
                             <span id="batteryCharging" class="chip chip-success"></span>
                         </div>
+                        <p class="battery-autonomia" id="batteryAutonomia" title="Estimativa a partir do histórico da trilha (só com amostras reais)">Autonomia estimada: sem histórico suficiente</p>
                     </div>
                 </article>
 
@@ -419,6 +446,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=24"></script>
+    <script src="app.js?v=25"></script>
 </body>
 </html>
