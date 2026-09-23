@@ -40,6 +40,9 @@ const elements = {
     accelX: $('accelX'), accelY: $('accelY'), accelZ: $('accelZ'), steps: $('steps'),
     batteryFill: $('batteryFill'), batteryValue: $('batteryValue'), batteryVoltage: $('batteryVoltage'), batteryCharging: $('batteryCharging'),
     rsrp: $('rsrp'), rsrq: $('rsrq'), operator: $('operator'), serviceType: $('serviceType'), netBand: $('netBand'),
+    netMccMnc: $('netMccMnc'), netMode: $('netMode'), netSupportedBands: $('netSupportedBands'),
+    netTac: $('netTac'), netCellId: $('netCellId'), netUeMode: $('netUeMode'), netIp: $('netIp'),
+    netSnr: $('netSnr'), netWifi: $('netWifi'), netSource: $('netSource'),
     centerMap: $('centerMap'), toggleTrail: $('toggleTrail'), trailStatus: $('trailStatus'), trailRange: $('trailRange'),
     configModal: $('configModal'), apiKey: $('apiKey'), teamApiKey: $('teamApiKey'), userEmail: $('userEmail'), orgSlug: $('orgSlug'), projectSlug: $('projectSlug'), deviceIdInput: $('deviceIdInput'),
     saveConfig: $('saveConfig'), cancelConfig: $('cancelConfig'), configBtn: $('configBtn'), closeModal: $('closeModal'),
@@ -206,27 +209,51 @@ function applySerialOverlay(fromMsg, parsed, serial) {
     if (!serial || !serial.ok) return { fromMsg, parsed, used: false };
     const fm = { ...fromMsg, gps: { ...(fromMsg.gps || {}) } };
     let used = false;
+    let p = { ...parsed };
     if (fm.temp == null && serial.temperatureC != null) { fm.temp = Number(serial.temperatureC); telemetrySource.env = 'serial'; used = true; }
     else if (fm.temp != null) telemetrySource.env = telemetrySource.env || 'cloud';
     if (fm.hum == null && serial.humidityPct != null) { fm.hum = Number(serial.humidityPct); telemetrySource.env = 'serial'; used = true; }
     if (fm.press == null && serial.pressure != null) { fm.press = normalizePressHpa(serial.pressure); telemetrySource.env = 'serial'; used = true; }
     if (fm.batteryV == null && serial.batteryMv != null) { fm.batteryV = serial.batteryMv / 1000; telemetrySource.battery = 'serial'; used = true; }
-    else if (fm.batteryV != null || parsed.batteryV != null) telemetrySource.battery = telemetrySource.battery || 'cloud';
+    else if (fm.batteryV != null || p.batteryV != null) telemetrySource.battery = telemetrySource.battery || 'cloud';
     if (fm.rsrp == null && serial.rsrp != null) { fm.rsrp = Number(serial.rsrp); telemetrySource.net = 'serial'; used = true; }
     if (fm.rsrq == null && serial.rsrq != null) { fm.rsrq = Number(serial.rsrq); telemetrySource.net = 'serial'; used = true; }
-    if (!parsed.operator && (serial.operator || serial.mccMnc)) {
-        parsed = { ...parsed, operator: serial.operator || serial.mccMnc };
-        telemetrySource.net = 'serial'; used = true;
-    } else if (parsed.operator) telemetrySource.net = telemetrySource.net || 'cloud';
-    if (parsed.band == null && serial.band != null) {
-        parsed = { ...parsed, band: serial.band };
-        telemetrySource.net = 'serial'; used = true;
+    if (fm.snr == null && serial.snr != null) { fm.snr = Number(serial.snr); telemetrySource.net = 'serial'; used = true; }
+    const take = (key, val) => {
+        if (val == null || val === '') return;
+        if (p[key] == null || p[key] === '' || p[key] === '—') { p[key] = val; telemetrySource.net = 'serial'; used = true; }
+    };
+    take('mccMnc', serial.mccMnc);
+    take('mcc', serial.mcc);
+    take('mnc', serial.mnc);
+    take('operator', serial.operator || (serial.mccMnc ? plmnHint(serial.mccMnc) : null));
+    take('band', serial.band);
+    take('supportedBands', serial.supportedBands);
+    take('networkMode', serial.networkMode || serial.accessTech);
+    take('accessTech', serial.accessTech);
+    take('ueMode', serial.ueMode);
+    take('ipAddress', serial.ipAddress);
+    take('snr', serial.snr);
+    take('tac', serial.tac);
+    take('tacDec', serial.tacDec);
+    take('eci', serial.eci);
+    take('eciDec', serial.eciDec);
+    take('cellId', serial.cellId || serial.eciDec || serial.eci);
+    take('wifiApCount', serial.wifiApCount);
+    take('wifiStatus', serial.wifiStatus);
+    if (serial.operator || serial.mccMnc || serial.band != null || serial.rsrp != null || serial.ipAddress)
+        telemetrySource.net = telemetrySource.net || 'serial';
+    else if (p.operator || p.mccMnc) telemetrySource.net = telemetrySource.net || 'cloud';
+    // Ensure VIVO hint when PLMN known
+    if (p.mccMnc && (!p.operator || String(p.operator) === String(p.mccMnc) || /^\d+$/.test(String(p.operator)))) {
+        const h = plmnHint(p.mccMnc);
+        if (h) p.operator = h;
     }
     if ((fm.gps?.lat == null || fm.gps?.lon == null) && serial.lat != null && serial.lon != null) {
         fm.gps = { lat: Number(serial.lat), lon: Number(serial.lon), accuracy: serial.locationAccuracy != null ? Number(serial.locationAccuracy) : undefined };
         telemetrySource.gps = 'serial'; used = true;
     } else if (fm.gps?.lat != null) telemetrySource.gps = telemetrySource.gps || 'cloud';
-    return { fromMsg: fm, parsed, used };
+    return { fromMsg: fm, parsed: p, used };
 }
 function updateSourceBadge() {
     const el = elements.dataSourceBadge;
@@ -293,6 +320,60 @@ async function listFotaJobs(id) {
     return [];
 }
 
+
+/* ---------- Network helpers ---------- */
+const PLMN_HINTS = { '72410': 'VIVO', '72406': 'VIVO', '72423': 'VIVO', '72411': 'VIVO', '72405': 'Claro', '72402': 'TIM', '72403': 'TIM', '72404': 'TIM' };
+function plmnHint(mccMnc) {
+    const k = String(mccMnc || '').trim();
+    return PLMN_HINTS[k] || null;
+}
+function formatOperator(op, mccMnc) {
+    const plmn = mccMnc != null ? String(mccMnc).trim() : '';
+    const hint = plmnHint(plmn);
+    let name = (op != null && op !== '' && op !== '—') ? String(op).trim() : '';
+    if (!name || name === plmn || /^\d{5,6}$/.test(name)) name = hint || name;
+    if (!name && hint) name = hint;
+    if (name && plmn && name !== plmn) return `${name} · ${plmn}`;
+    if (name) return name;
+    if (plmn) return hint ? `${hint} · ${plmn}` : plmn;
+    return '—';
+}
+function formatBands(bands) {
+    if (bands == null || bands === '') return null;
+    if (Array.isArray(bands)) return bands.length ? bands.join(', ') : null;
+    if (typeof bands === 'string') {
+        const s = bands.trim();
+        if (!s) return null;
+        return s.replace(/^\(|\)$/g, '');
+    }
+    return String(bands);
+}
+function formatTac(tac, tacDec) {
+    if (tacDec != null && Number.isFinite(Number(tacDec))) {
+        const d = Number(tacDec);
+        const h = tac != null ? String(tac).toUpperCase() : d.toString(16).toUpperCase();
+        return `${d} (0x${h})`;
+    }
+    if (tac != null && tac !== '') {
+        const h = String(tac);
+        try { return `${parseInt(h, 16)} (0x${h.toUpperCase()})`; } catch { return h; }
+    }
+    return null;
+}
+function formatCellId(eci, eciDec, cellId) {
+    const dec = eciDec != null ? Number(eciDec) : (cellId != null && String(cellId).match(/^\d+$/) ? Number(cellId) : null);
+    const hex = eci != null ? String(eci) : (cellId != null && /[A-Fa-f]/.test(String(cellId)) ? String(cellId) : null);
+    if (dec != null && Number.isFinite(dec)) {
+        const h = hex ? hex.toUpperCase() : dec.toString(16).toUpperCase();
+        return `${dec} (0x${h})`;
+    }
+    if (hex) {
+        try { return `${parseInt(hex, 16)} (0x${hex.toUpperCase()})`; } catch { return hex; }
+    }
+    if (cellId != null) return String(cellId);
+    return null;
+}
+
 /* ---------- Parsing ---------- */
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
 /** BME680 UART often reports kPa (~92) mislabeled as Pa; display as hPa (~920). */
@@ -306,7 +387,8 @@ function normalizePressHpa(v) {
 function serialIsHealthy(serial) {
     if (!serial || !serial.ok) return false;
     return serial.batteryMv != null || serial.temperatureC != null || serial.operator != null
-        || serial.humidityPct != null || serial.rsrp != null;
+        || serial.mccMnc != null || serial.humidityPct != null || serial.rsrp != null
+        || serial.ipAddress != null || serial.band != null;
 }
 
 function extractFromMessages(items) {
@@ -341,6 +423,29 @@ function parseDevice(d) {
     const lastSeen = d.$meta?.updatedAt || d.last_seen || d._memfault?.last_seen || d._nrf?.$meta?.updatedAt;
     const firmware = fw.app?.version || di.appVersion || di.modemFirmware || d.last_seen_release?.version || d._memfault?.last_seen_release?.version || '—';
     const batteryV = num(bat.voltage || bat.batteryVoltage || bat.v || di.batteryVoltage);
+    const mccMnc = ni.mccmnc || ni.mccMnc || ni.MCCMNC || null;
+    let operator = ni.networkOperator || ni.operator || null;
+    if ((!operator || String(operator) === String(mccMnc) || /^\d{5,6}$/.test(String(operator || ''))) && mccMnc) {
+        operator = plmnHint(mccMnc) || operator || mccMnc;
+    }
+    const tacRaw = ni.areaCode ?? ni.tac ?? ni.TAC;
+    const cellRaw = ni.cellID ?? ni.cellId ?? ni.eci ?? ni.ECI;
+    let tacDec = num(tacRaw);
+    let tacHex = null;
+    if (tacRaw != null && typeof tacRaw === 'string' && /[A-Fa-f]/.test(tacRaw)) {
+        tacHex = tacRaw;
+        try { tacDec = parseInt(tacRaw, 16); } catch { /* keep */ }
+    } else if (tacDec != null) {
+        tacHex = Number(tacDec).toString(16).toUpperCase();
+    }
+    let eciDec = num(cellRaw);
+    let eciHex = null;
+    if (cellRaw != null && typeof cellRaw === 'string' && /[A-Fa-f]/.test(cellRaw)) {
+        eciHex = cellRaw;
+        try { eciDec = parseInt(cellRaw, 16); } catch { /* keep */ }
+    } else if (eciDec != null) {
+        eciHex = Number(eciDec).toString(16).toUpperCase();
+    }
     return {
         name: d.name || d.nickname || id,
         id,
@@ -348,13 +453,28 @@ function parseDevice(d) {
         session: rep.sessionIdentifier,
         firmware,
         lastSeen,
-        operator: ni.mccmnc || ni.networkOperator || ni.operator,
-        networkMode: ni.networkMode,
-        band: ni.currentBand || ni.band,
+        operator,
+        mccMnc,
+        mcc: mccMnc ? num(String(mccMnc).slice(0, 3)) : undefined,
+        mnc: mccMnc ? num(String(mccMnc).slice(3)) : undefined,
+        networkMode: ni.networkMode || ni.accessTech,
+        band: ni.currentBand ?? ni.band,
+        supportedBands: ni.supportedBands || ni.supportedBand || null,
+        ueMode: ni.ueMode ?? ni.UEMode ?? null,
+        ipAddress: ni.ipAddress || ni.ip || ni.IPV4 || null,
+        tac: tacHex,
+        tacDec,
+        eci: eciHex,
+        eciDec,
+        cellId: eciDec ?? cellRaw,
         rsrp: num(ni.rsrp),
         rsrq: num(ni.rsrq),
+        snr: num(ni.snr ?? ni.SINR),
+        wifiApCount: num(ni.wifiApCount ?? ni.wifiAps),
+        wifiStatus: ni.wifiStatus || null,
         batteryV,
         hardware: d.hardware_version || d._memfault?.hardware_version,
+        netSourceHint: 'cloud',
     };
 }
 
@@ -391,7 +511,9 @@ function updateUI(parsed, fromMsg) {
     const rsrp = fromMsg.rsrp ?? parsed.rsrp;
     const rsrq = fromMsg.rsrq ?? parsed.rsrq;
     if (rsrp != null) setText(elements.rsrp, `${rsrp} dBm`);
-    if (rsrq != null) setText(elements.rsrq, `${rsrq} dB`);
+    else setText(elements.rsrp, '—');
+    if (rsrq != null) setText(elements.rsrq, `${Number(rsrq)} dB`);
+    else setText(elements.rsrq, '—');
     if (fromMsg.gps?.satellites != null) setText(elements.gpsSats, String(fromMsg.gps.satellites));
     if (fromMsg.steps != null) setText(elements.steps, String(fromMsg.steps));
     if (fromMsg.accel && typeof fromMsg.accel === 'object') {
@@ -400,8 +522,24 @@ function updateUI(parsed, fromMsg) {
         if (ay != null) setText(elements.accelY, ay.toFixed(2));
         if (az != null) setText(elements.accelZ, az.toFixed(2));
     }
-    if (parsed.operator) setText(elements.operator, `${parsed.operator}${parsed.networkMode ? ` · ${parsed.networkMode}` : ''}`);
-    setText(elements.netBand, parsed.band ? `B${parsed.band}` : '—');
+    // Rede card — serial overlay + cloud networkInfo
+    const mccMnc = parsed.mccMnc || null;
+    setText(elements.operator, formatOperator(parsed.operator, mccMnc));
+    setText(elements.netMccMnc, mccMnc ? String(mccMnc) : '—');
+    setText(elements.netMode, parsed.networkMode || parsed.accessTech || '—');
+    setText(elements.netBand, parsed.band != null && parsed.band !== '' ? `B${parsed.band}` : '—');
+    setText(elements.netSupportedBands, formatBands(parsed.supportedBands) || '—');
+    setText(elements.netTac, formatTac(parsed.tac, parsed.tacDec) || '—');
+    setText(elements.netCellId, formatCellId(parsed.eci, parsed.eciDec, parsed.cellId) || '—');
+    setText(elements.netUeMode, parsed.ueMode != null && parsed.ueMode !== '' ? String(parsed.ueMode) : '—');
+    setText(elements.netIp, parsed.ipAddress || '—');
+    const snr = fromMsg.snr ?? parsed.snr;
+    setText(elements.netSnr, snr != null ? `${snr} dB` : '—');
+    const wifiTxt = parsed.wifiStatus
+        || (parsed.wifiApCount != null ? `${parsed.wifiApCount} APs` : null);
+    setText(elements.netWifi, wifiTxt || '—');
+    const src = telemetrySource.net || (lastSerial?.ok ? 'serial' : null) || parsed.netSourceHint || null;
+    setText(elements.netSource, src || '—');
 }
 function renderMsgTable(items) {
     if (!elements.msgTable) return;

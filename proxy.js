@@ -69,13 +69,21 @@ function softMessagesFromSerial(serial, deviceId) {
       source: serial.locationSource || 'serial',
     });
   }
-  if (serial.operator || serial.mccMnc || serial.band != null) {
+  if (serial.operator || serial.mccMnc || serial.band != null || serial.ipAddress || serial.networkMode) {
     push('DEVICE', {
       networkOperator: serial.operator,
       mccmnc: serial.mccMnc,
       currentBand: serial.band,
+      supportedBands: serial.supportedBands,
+      networkMode: serial.networkMode || serial.accessTech,
+      ueMode: serial.ueMode,
+      ipAddress: serial.ipAddress,
+      areaCode: serial.tacDec ?? serial.tac,
+      cellID: serial.eciDec ?? serial.cellId ?? serial.eci,
       rsrp: serial.rsrp,
       rsrq: serial.rsrq,
+      snr: serial.snr,
+      wifiApCount: serial.wifiApCount,
       batteryVoltage: serial.batteryMv != null ? serial.batteryMv / 1000 : undefined,
     });
   }
@@ -732,8 +740,16 @@ app.use('/api', async (req, res) => {
           if (serial.operator && !ni.networkOperator) ni.networkOperator = serial.operator;
           if (serial.mccMnc && !ni.mccmnc) ni.mccmnc = serial.mccMnc;
           if (serial.band != null && !ni.currentBand) ni.currentBand = serial.band;
+          if (serial.supportedBands && !ni.supportedBands) ni.supportedBands = serial.supportedBands;
+          if ((serial.networkMode || serial.accessTech) && !ni.networkMode) ni.networkMode = serial.networkMode || serial.accessTech;
+          if (serial.ueMode != null && ni.ueMode == null) ni.ueMode = serial.ueMode;
+          if (serial.ipAddress && !ni.ipAddress) ni.ipAddress = serial.ipAddress;
+          if (serial.tacDec != null && ni.areaCode == null) ni.areaCode = serial.tacDec;
+          if ((serial.eciDec != null || serial.cellId != null) && ni.cellID == null) ni.cellID = serial.eciDec ?? serial.cellId;
           if (serial.rsrp != null && ni.rsrp == null) ni.rsrp = serial.rsrp;
           if (serial.rsrq != null && ni.rsrq == null) ni.rsrq = serial.rsrq;
+          if (serial.snr != null && ni.snr == null) ni.snr = serial.snr;
+          if (serial.wifiApCount != null && ni.wifiApCount == null) ni.wifiApCount = serial.wifiApCount;
           if (serial.batteryMv != null) {
             out.state.reported.device.batteryStatus = out.state.reported.device.batteryStatus || {};
             if (out.state.reported.device.batteryStatus.voltage == null) {

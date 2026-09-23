@@ -16,3 +16,6 @@ serial_telemetry.pid
 *.swp
 *.swo
 /tmp/
+
+# Local Netlify folder
+.netlify

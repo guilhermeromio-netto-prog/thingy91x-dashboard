@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=11">
+    <link rel="stylesheet" href="styles.css?v=12">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -158,12 +158,23 @@
                         <h2>Rede</h2>
                     </header>
                     <div class="card-body">
-                        <div class="net-row">
+                        <div class="net-grid" id="netGrid">
+                            <div class="net-item"><span class="net-label">Operadora</span><span class="net-value" id="operator">—</span></div>
+                            <div class="net-item"><span class="net-label">MCC/MNC</span><span class="net-value" id="netMccMnc">—</span></div>
+                            <div class="net-item"><span class="net-label">Network Mode</span><span class="net-value" id="netMode">—</span></div>
+                            <div class="net-item"><span class="net-label">Band atual</span><span class="net-value" id="netBand">—</span></div>
+                            <div class="net-item net-item-wide"><span class="net-label">Bandas suportadas</span><span class="net-value" id="netSupportedBands">—</span></div>
+                            <div class="net-item"><span class="net-label">Area Code (TAC)</span><span class="net-value" id="netTac">—</span></div>
+                            <div class="net-item"><span class="net-label">Cell ID</span><span class="net-value" id="netCellId">—</span></div>
+                            <div class="net-item"><span class="net-label">UE Mode</span><span class="net-value" id="netUeMode">—</span></div>
+                            <div class="net-item"><span class="net-label">IP</span><span class="net-value" id="netIp">—</span></div>
                             <div class="net-item"><span class="net-label">RSRP</span><span class="net-value" id="rsrp">—</span></div>
                             <div class="net-item"><span class="net-label">RSRQ</span><span class="net-value" id="rsrq">—</span></div>
+                            <div class="net-item"><span class="net-label">SNR</span><span class="net-value" id="netSnr">—</span></div>
+                            <div class="net-item"><span class="net-label">Wi‑Fi</span><span class="net-value" id="netWifi">—</span></div>
+                            <div class="net-item"><span class="net-label">Fonte</span><span class="net-value" id="netSource">—</span></div>
+                            <div class="net-item net-item-wide"><span class="net-label">Serviço / trail</span><span class="net-value" id="serviceType">—</span></div>
                         </div>
-                        <div class="net-operator" id="operator">—</div>
-                        <div class="net-extra"><span id="serviceType">—</span> · <span id="netBand">—</span></div>
                     </div>
                 </article>
 
@@ -329,6 +340,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=12"></script>
 </body>
 </html>

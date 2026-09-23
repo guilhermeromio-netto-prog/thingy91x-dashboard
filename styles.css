@@ -379,3 +379,38 @@ header h1 {
 .chip-source { opacity: .9; letter-spacing: .02em; text-transform: lowercase; }
 .chip-serial { background: rgba(9, 132, 227, .25); border: 1px solid rgba(9, 132, 227, .55); }
 .chip-cloud { background: rgba(0, 184, 148, .2); border: 1px solid rgba(0, 184, 148, .45); }
+
+
+/* Rede card — full network grid */
+.net-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    margin-top: 4px;
+}
+.net-item {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.net-item-wide { grid-column: 1 / -1; }
+.net-label {
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: #636e72;
+}
+.net-value {
+    font-weight: 600;
+    font-size: .88rem;
+    word-break: break-word;
+    color: #2d3436;
+}
+.net-operator { font-weight: 700; font-size: 1.05rem; margin-top: 8px; }
+@media (min-width: 520px) {
+    .card-network .net-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
