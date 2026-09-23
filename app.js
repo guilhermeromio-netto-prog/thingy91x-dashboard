@@ -36,9 +36,18 @@ let config = {
 let map, marker, accuracyCircle = null, trailLine = null, trailEnabled = true;
 let fleetMarkers = [];
 let pollInterval = null;
-const POLL_MS = 10000;
+function resolvePollMs() {
+    const h = location.hostname;
+    // Local / tunnel: faster poll helps USB serial overlay
+    if (h === 'localhost' || h === '127.0.0.1' || /trycloudflare\.com$/i.test(h)) return 10000;
+    // github.io + other public HTTPS via Netlify API: 1 min
+    return 60000;
+}
+const POLL_MS = resolvePollMs();
 let lastConnected = null, lastSeenTs = null;
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
+let trailFailLogged = false, lastTrailFitCount = 0;
+const LOCAL_TRAIL_CAP = 2000;
 let telemetrySource = { env: null, battery: null, net: null, gps: null };
 let geo = JSON.parse(localStorage.getItem('thingy_geo') || 'null');
 let geoCircle = null, geoInside = null;
@@ -57,7 +66,7 @@ const elements = {
     netMccMnc: $('netMccMnc'), netMode: $('netMode'), netSupportedBands: $('netSupportedBands'),
     netTac: $('netTac'), netCellId: $('netCellId'), netUeMode: $('netUeMode'), netIp: $('netIp'),
     netSnr: $('netSnr'), netWifi: $('netWifi'), netSource: $('netSource'),
-    centerMap: $('centerMap'), toggleTrail: $('toggleTrail'), trailStatus: $('trailStatus'), trailRange: $('trailRange'),
+    centerMap: $('centerMap'), toggleTrail: $('toggleTrail'), trailStatus: $('trailStatus'), trailPoints: $('trailPoints'), trailRange: $('trailRange'),
     configModal: $('configModal'), apiKey: $('apiKey'), teamApiKey: $('teamApiKey'), userEmail: $('userEmail'), orgSlug: $('orgSlug'), projectSlug: $('projectSlug'), deviceIdInput: $('deviceIdInput'),
     saveConfig: $('saveConfig'), cancelConfig: $('cancelConfig'), configBtn: $('configBtn'), closeModal: $('closeModal'),
     logPanel: $('logPanel'), logFilter: $('logFilter'), exportLog: $('exportLog'), clearLog: $('clearLog'),
@@ -653,7 +662,8 @@ async function loadFleet(light = false) {
 function switchDevice(id) {
     config.deviceId = id; localStorage.setItem('nrf_device_id', id);
     if (elements.deviceSelect) elements.deviceSelect.value = id;
-    lastConnected = null; log('info', `Trocado para ${id}`); fetchAndUpdate(); loadTrail();
+    lastConnected = null; lastTrail = []; lastTrailFitCount = 0; trailFailLogged = false;
+    log('info', `Trocado para ${id}`); fetchAndUpdate(); loadTrail();
 }
 
 /* ---------- Map ---------- */
@@ -665,20 +675,169 @@ function initMap() {
     trailLine = L.polyline([], { color: '#0984e3', weight: 3, opacity: 0.7 }).addTo(map);
     restoreGeofence(); log('info', 'Mapa pronto');
 }
-function updateMap(lat, lon, acc) {
+/** Move marker + accuracy only. Trail polyline is owned by applyTrailPoints. */
+function updateMap(lat, lon, acc, opts = {}) {
     if (!map || !marker) return;
+    const appendTrail = !!opts.appendTrail;
     marker.setLatLng([lat, lon]); marker.setOpacity(1);
     if (acc != null && Number.isFinite(Number(acc))) {
         if (accuracyCircle) map.removeLayer(accuracyCircle);
         accuracyCircle = L.circle([lat, lon], { radius: Number(acc), color: '#0984e3', fillOpacity: 0.1, weight: 1 }).addTo(map);
     }
-    if (trailEnabled && trailLine) trailLine.addLatLng([lat, lon]);
-    if (map.getZoom() < 12) map.setView([lat, lon], 15);
+    if (appendTrail) {
+        accumulateLocalPoint({
+            lat: Number(lat), lon: Number(lon),
+            at: opts.at || new Date().toISOString(),
+            src: opts.src || 'live',
+            unc: acc != null ? Number(acc) : undefined,
+            serviceType: opts.serviceType || null,
+        });
+    }
+    if (!opts.skipZoom && map.getZoom() < 12) {
+        const n = trailLine ? trailLine.getLatLngs().length : 0;
+        if (n < 2) map.setView([lat, lon], 15);
+    }
 }
 function drawFleetMarkers(fleet) {
     fleetMarkers.forEach(m => map.removeLayer(m)); fleetMarkers = [];
-    // Mantém simples: só loga; markers detalhados exigiriam lat por device (custoso). Mostra atual.
     log('info', `Frota online: ${fleet.filter(f => f.connected).length}/${fleet.length}`);
+}
+
+/* ---------- Trail (multi-day) ---------- */
+function localTrailKey() {
+    return `thingy_trail_pts_${config.deviceId || 'default'}`;
+}
+function loadLocalTrailRaw() {
+    try { return JSON.parse(localStorage.getItem(localTrailKey()) || '[]'); }
+    catch { return []; }
+}
+function saveLocalTrailRaw(arr) {
+    try { localStorage.setItem(localTrailKey(), JSON.stringify(arr.slice(-LOCAL_TRAIL_CAP))); }
+    catch (e) { log('warn', 'localStorage trilha cheio', e.message); }
+}
+function numOrNull(v) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+/** Normalize nRF Cloud location/history item (varying shapes) → {lat,lon,at,unc,serviceType}. */
+function normalizeLocItem(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const loc = (raw.location && typeof raw.location === 'object') ? raw.location
+        : (raw.geo && typeof raw.geo === 'object') ? raw.geo
+        : raw;
+    const lat = numOrNull(loc.lat ?? loc.latitude ?? raw.lat ?? raw.latitude);
+    const lon = numOrNull(loc.lon ?? loc.lng ?? loc.longitude ?? raw.lon ?? raw.lng ?? raw.longitude);
+    if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    const meta = raw.$meta || raw.meta || {};
+    const at = raw.timestamp || raw.ts || raw.receivedAt || raw.insertedAt || raw.recordedAt
+        || meta.updatedAt || meta.insertedAt || loc.timestamp || loc.ts || null;
+    const unc = numOrNull(
+        raw.uncertainty ?? raw.unc ?? raw.accuracy
+        ?? meta.acc ?? meta.uncertainty ?? loc.uncertainty ?? loc.accuracy
+    );
+    const serviceType = raw.serviceType || raw.service || loc.serviceType || raw.src || null;
+    return { lat, lon, at: at ? String(at) : null, unc, serviceType };
+}
+function samePointRough(a, b) {
+    if (!a || !b) return false;
+    if (Number(a.lat).toFixed(5) === Number(b.lat).toFixed(5)
+        && Number(a.lon).toFixed(5) === Number(b.lon).toFixed(5)) return true;
+    return haversine(Number(a.lat), Number(a.lon), Number(b.lat), Number(b.lon)) < 15;
+}
+function dedupeConsecutive(points) {
+    const out = [];
+    for (const p of points) {
+        if (!p) continue;
+        const prev = out[out.length - 1];
+        if (prev && samePointRough(prev, p)) continue;
+        out.push(p);
+    }
+    return out;
+}
+function minuteKey(at) {
+    if (!at) return null;
+    const d = new Date(at);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+}
+/** Prefer cloud when both exist for the same minute. */
+function mergeTrailPoints(cloudPts, localPts) {
+    const byKey = new Map();
+    for (const p of localPts || []) {
+        const k = minuteKey(p.at) || `${Number(p.lat).toFixed(5)},${Number(p.lon).toFixed(5)}`;
+        byKey.set(k, { ...p, _src: p._src || p.src || 'local' });
+    }
+    for (const p of cloudPts || []) {
+        const k = minuteKey(p.at) || `${Number(p.lat).toFixed(5)},${Number(p.lon).toFixed(5)}`;
+        byKey.set(k, { ...p, _src: 'cloud' });
+    }
+    return [...byKey.values()].sort((a, b) => {
+        const ta = a.at ? new Date(a.at).getTime() : 0;
+        const tb = b.at ? new Date(b.at).getTime() : 0;
+        return ta - tb;
+    });
+}
+function trailDistanceKm(pts) {
+    let m = 0;
+    for (let i = 1; i < pts.length; i++) {
+        m += haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+    }
+    return m / 1000;
+}
+function updateTrailPointsUI(n, km) {
+    const on = trailEnabled ? 'ON' : 'OFF';
+    setText(elements.trailStatus, on);
+    const kmTxt = (km >= 10) ? km.toFixed(0) : km.toFixed(1);
+    setText(elements.trailPoints, `Trilha ${on} · ${n} pts · ${kmTxt} km`);
+}
+function accumulateLocalPoint(pt) {
+    if (!pt || pt.lat == null || pt.lon == null || !config.deviceId) return;
+    const store = loadLocalTrailRaw();
+    const norm = {
+        lat: Number(pt.lat), lon: Number(pt.lon),
+        at: pt.at || new Date().toISOString(),
+        src: pt.src || pt._src || 'live',
+        unc: pt.unc, serviceType: pt.serviceType || null,
+    };
+    const last = store[store.length - 1];
+    if (last && samePointRough(last, norm)) {
+        // refresh timestamp if newer
+        if (norm.at && (!last.at || new Date(norm.at) > new Date(last.at))) {
+            store[store.length - 1] = { ...last, at: norm.at, unc: norm.unc ?? last.unc };
+            saveLocalTrailRaw(store);
+        }
+        return;
+    }
+    store.push(norm);
+    saveLocalTrailRaw(store);
+}
+function applyTrailPoints(points) {
+    const deduped = dedupeConsecutive((points || []).filter(p => p && p.lat != null && p.lon != null));
+    lastTrail = deduped;
+    const latlngs = deduped.map(p => [Number(p.lat), Number(p.lon)]);
+    if (trailLine) trailLine.setLatLngs(trailEnabled ? latlngs : []);
+    const km = trailDistanceKm(deduped);
+    updateTrailPointsUI(deduped.length, km);
+    if (trailEnabled && map && latlngs.length >= 2 && latlngs.length !== lastTrailFitCount) {
+        try {
+            map.fitBounds(trailLine.getBounds(), { padding: [40, 40], maxZoom: 14 });
+            lastTrailFitCount = latlngs.length;
+        } catch { /* bounds invalid */ }
+    }
+    return deduped;
+}
+function applyPositionFromPoint(pt, srcLabel) {
+    if (!pt || pt.lat == null || pt.lon == null) return false;
+    const lat = Number(pt.lat), lon = Number(pt.lon);
+    setText(elements.gpsCoords, `${lat.toFixed(6)}, ${lon.toFixed(6)}`);
+    setText(elements.gpsLat, lat.toFixed(6));
+    setText(elements.gpsLon, lon.toFixed(6));
+    if (pt.unc != null) setText(elements.gpsAcc, `${Math.round(pt.unc)} m`);
+    setGpsSourceBadge(srcLabel || pt.serviceType || pt.src || 'trail');
+    updateMap(lat, lon, pt.unc, { skipZoom: (lastTrail.length >= 2), appendTrail: false });
+    checkGeofence(lat, lon);
+    return true;
 }
 
 /* ---------- Geofence ---------- */
@@ -730,12 +889,29 @@ async function fetchAndUpdate() {
         const ser = serial || lastSerial;
         const healthy = serialIsHealthy(ser);
         const hasGps = fromMsg.gps?.lat != null && fromMsg.gps?.lon != null;
+        // Live fix → local trail accumulate (Pages without USB still builds a path)
+        if (hasGps) {
+            accumulateLocalPoint({
+                lat: fromMsg.gps.lat, lon: fromMsg.gps.lon,
+                at: fromMsg.latestAt || new Date().toISOString(),
+                src: fromMsg.gps.source || telemetrySource.gps || 'live',
+                unc: fromMsg.gps.accuracy,
+                serviceType: fromMsg.gps.source || null,
+            });
+        }
         // Posição headline: calm/actionable; avoid scary Simple Token nag when serial healthy
         if (!hasGps) {
             setGpsSourceBadge(null);
             const src = ser?.locationSource || '';
             const aps = Array.isArray(ser?.wifiAps) ? ser.wifiAps.length : (ser?.wifiApCount || 0);
-            if (!healthy) {
+            // Fallback chain for github.io (no serial): trail last → local store
+            const trailLast = lastTrail.length ? lastTrail[lastTrail.length - 1] : null;
+            const localRaw = loadLocalTrailRaw();
+            const localLast = localRaw.length ? normalizeLocItem(localRaw[localRaw.length - 1]) : null;
+            const fallback = trailLast || localLast;
+            if (fallback && applyPositionFromPoint(fallback, fallback.serviceType || fallback.src || 'trilha')) {
+                // position shown from history/local
+            } else if (!healthy) {
                 setText(elements.gpsCoords, 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
             } else if (src === 'cloud_pending' || /loc_cloud|pending/i.test(ser?.rawNotes || '')) {
                 setText(elements.gpsCoords, 'Sem fix — pedido Wi‑Fi/célula na nuvem (ainda sem coordenadas)');
@@ -758,30 +934,68 @@ async function fetchAndUpdate() {
         const st = lastTrail.length ? [...new Set(lastTrail.map(t => t.serviceType).filter(Boolean))].join(',') : '';
         if (st) setText(elements.serviceType, st);
         const src = overlay.used ? ' +serial' : '';
-        log('info', `Poll OK · ${messages.length} msgs [${apps.join(',') || '-'}]${src} · ${timeAgo(fromMsg.latestAt || parsed.lastSeen)}`, `fw ${parsed.firmware} · ${latency}ms`);
+        log('info', `Poll OK · ${messages.length} msgs [${apps.join(',') || '-'}]${src} · ${timeAgo(fromMsg.latestAt || parsed.lastSeen)}`, `fw ${parsed.firmware} · ${latency}ms · poll ${POLL_MS / 1000}s`);
         if (parsed.connected === false) log('warn', 'connected=false — sem MQTT. Cheque LTE/SIM/bateria.');
+        // Refresh trail every successful poll (failures logged once)
+        await loadTrail({ quiet: true });
     } catch (e) {
         log('err', `Poll: ${e.message}`); setStatus(false, `Erro: ${e.message.slice(0, 60)}`);
         if (/401|403/.test(e.message)) showModal();
     }
 }
-async function loadTrail() {
-    if (!config.deviceId || !trailEnabled) return;
+async function loadTrail(opts = {}) {
+    if (!config.deviceId || !trailEnabled) {
+        updateTrailPointsUI(lastTrail.length, trailDistanceKm(lastTrail));
+        return;
+    }
+    const quiet = !!opts.quiet;
+    const hours = Number(elements.trailRange?.value || 168);
+    let cloudItems = [];
+    let cloudOk = false;
+    let cloudErr = null;
     try {
-        const hours = Number(elements.trailRange?.value || 24);
-        log('info', `Trilha ${hours}h…`);
-        const items = await getLocationHistory(config.deviceId, hours);
-        lastTrail = items;
-        const pts = items.filter(l => l.lat && l.lon).map(l => [Number(l.lat), Number(l.lon)]);
-        if (pts.length && trailLine) {
-            trailLine.setLatLngs(pts);
-            const sts = [...new Set(items.map(i => i.serviceType).filter(Boolean))];
-            setText(elements.serviceType, sts.join(', ') || 'GNSS');
-            log('ok', `Trilha: ${pts.length} pts [${sts.join(',') || '?'}]`);
-            const last = items[items.length - 1];
-            if (last) updateMap(Number(last.lat), Number(last.lon), last.meta?.acc);
-        } else log('warn', 'Trilha vazia no período');
-    } catch (e) { log('warn', `Trilha: ${e.message}`); }
+        if (!quiet) log('info', `Trilha ${hours}h…`);
+        cloudItems = await getLocationHistory(config.deviceId, hours);
+        cloudOk = true;
+        trailFailLogged = false;
+    } catch (e) {
+        cloudErr = e;
+        if (!trailFailLogged) {
+            trailFailLogged = true;
+            const needsTeam = /401|403/.test(e.message);
+            if (needsTeam) {
+                log('warn', 'Trilha precisa da API Key da equipe (Simple Token) na engrenagem');
+            } else {
+                log('warn', `Trilha: ${e.message}`);
+            }
+        }
+    }
+    const cloudPts = (cloudItems || []).map(normalizeLocItem).filter(Boolean);
+    // Seed local store from cloud (deduped append)
+    for (const p of cloudPts) {
+        accumulateLocalPoint({ ...p, src: 'cloud' });
+    }
+    const cutoff = Date.now() - hours * 3600 * 1000;
+    const localPts = loadLocalTrailRaw()
+        .map(normalizeLocItem)
+        .filter(Boolean)
+        .filter(p => !p.at || new Date(p.at).getTime() >= cutoff);
+    const merged = dedupeConsecutive(mergeTrailPoints(cloudPts, localPts));
+    const applied = applyTrailPoints(merged);
+    const sts = [...new Set(applied.map(i => i.serviceType).filter(Boolean))];
+    if (sts.length) setText(elements.serviceType, sts.join(', '));
+    // Position from last history/local when useful (Pages without USB / no live fix)
+    const last = applied[applied.length - 1];
+    if (last) {
+        const gpsEl = elements.gpsCoords?.textContent || '';
+        const noFix = !gpsEl || gpsEl === '—' || /Sem fix/i.test(gpsEl);
+        if (noFix) applyPositionFromPoint(last, last.serviceType || last._src || 'trilha');
+    }
+    if (!quiet) {
+        if (applied.length) log('ok', `Trilha: ${applied.length} pts · ${trailDistanceKm(applied).toFixed(1)} km [${sts.join(',') || '?'}]`);
+        else if (cloudOk) log('warn', 'Trilha vazia no período — aguardando fixes (local + nuvem)');
+        else if (cloudErr) { /* already logged once */ }
+    }
 }
 function init() {
     if (!config.apiKey) { showModal(); log('warn', 'Sem User API Key / OAT'); return; }
@@ -801,8 +1015,11 @@ elements.closeModal?.addEventListener('click', hideModal);
 elements.configBtn?.addEventListener('click', showModal);
 elements.centerMap?.addEventListener('click', () => { try { map.setView(marker.getLatLng(), 15); } catch { log('warn', 'Sem posição ainda'); } });
 elements.toggleTrail?.addEventListener('click', () => {
-    trailEnabled = !trailEnabled; setText(elements.trailStatus, trailEnabled ? 'ON' : 'OFF');
-    log('info', `Trilha ${trailEnabled ? 'ON' : 'OFF'}`); if (!trailEnabled) trailLine?.setLatLngs([]); else loadTrail();
+    trailEnabled = !trailEnabled;
+    updateTrailPointsUI(lastTrail.length, trailDistanceKm(lastTrail));
+    log('info', `Trilha ${trailEnabled ? 'ON' : 'OFF'}`);
+    if (!trailEnabled) { trailLine?.setLatLngs([]); lastTrailFitCount = 0; }
+    else { lastTrailFitCount = 0; loadTrail(); }
 });
 elements.trailRange?.addEventListener('change', loadTrail);
 elements.clearLog?.addEventListener('click', () => { logStore.length = 0; elements.logPanel.innerHTML = ''; });
@@ -878,7 +1095,7 @@ elements.exportCsv?.addEventListener('click', () => {
 });
 elements.exportGeo?.addEventListener('click', () => {
     if (!lastTrail.length) return log('warn', 'Sem trilha — carregue trilha primeiro');
-    const gj = { type: 'FeatureCollection', features: lastTrail.filter(t => t.lat && t.lon).map(t => ({ type: 'Feature', properties: { recordedAt: t.recordedAt, serviceType: t.serviceType, acc: t.meta?.acc }, geometry: { type: 'Point', coordinates: [Number(t.lon), Number(t.lat)] } })) };
+    const gj = { type: 'FeatureCollection', features: lastTrail.filter(t => t.lat != null && t.lon != null).map(t => ({ type: 'Feature', properties: { recordedAt: t.at, serviceType: t.serviceType, acc: t.unc, src: t._src || t.src }, geometry: { type: 'Point', coordinates: [Number(t.lon), Number(t.lat)] } })) };
     download(`thingy91x-trail-${Date.now()}.geojson`, JSON.stringify(gj, null, 2)); log('info', 'GeoJSON exportado');
 });
 elements.exportShadow?.addEventListener('click', () => {
@@ -889,7 +1106,7 @@ elements.exportShadow?.addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=15', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=16', document.baseURI || location.href).href;
         navigator.serviceWorker.register(swHref).catch(() => {});
     }
     init(); loadFleet(false);

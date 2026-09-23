@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=15">
+    <link rel="stylesheet" href="styles.css?v=16">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -79,9 +79,11 @@
                             <button class="btn btn-outline" id="toggleTrail"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Trilha: <span id="trailStatus">ON</span></button>
                             <select id="trailRange" aria-label="Período da trilha">
                                 <option value="24">24h</option>
-                                <option value="168">7d</option>
+                                <option value="168" selected>7d</option>
                                 <option value="720">30d</option>
+                                <option value="2160">90d</option>
                             </select>
+                            <span id="trailPoints" class="trail-points" title="Pontos da trilha (nuvem + local)">Trilha ON · 0 pts · 0 km</span>
                         </div>
                     </div>
                 </div>
@@ -344,6 +346,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=15"></script>
+    <script src="app.js?v=16"></script>
 </body>
 </html>
