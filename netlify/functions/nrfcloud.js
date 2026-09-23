@@ -306,12 +306,39 @@ async function enrichDevice(auth, org, project, deviceId, memfaultRaw) {
   return normalizeDevice(memfaultRaw, extras);
 }
 
-function json(statusCode, body, extraHeaders = {}) {
+/** CORS: public dashboard on github.io calls this Netlify function cross-origin. */
+const CORS_ALLOW_HEADERS =
+  'Authorization, Content-Type, X-User-Email, X-User-Api-Key, X-Memfault-Org, X-Memfault-Project, X-Org-Slug, X-Project-Slug, X-Nrf-Team-Key, X-Device-Id, Cache-Control';
+
+function corsOrigin(event) {
+  const origin = (event?.headers?.origin || event?.headers?.Origin || '').toString();
+  // Mirror existing *: no credentials on fetch. Prefer echoing known public origins.
+  if (
+    origin === 'https://guilhermeromio-netto-prog.github.io' ||
+    /\.github\.io$/i.test((() => { try { return new URL(origin).hostname; } catch { return ''; } })()) ||
+    /\.netlify\.app$/i.test((() => { try { return new URL(origin).hostname; } catch { return ''; } })()) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+  ) {
+    return origin || '*';
+  }
+  return '*';
+}
+
+function corsHeaders(event, extra = {}) {
+  return {
+    'Access-Control-Allow-Origin': corsOrigin(event),
+    'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    ...extra,
+  };
+}
+
+function json(statusCode, body, extraHeaders = {}, event = null) {
   return {
     statusCode,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
+      ...corsHeaders(event),
       ...extraHeaders,
     },
     body: JSON.stringify(body),
@@ -322,12 +349,7 @@ export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers':
-          'Authorization, Content-Type, X-User-Email, X-User-Api-Key, X-Memfault-Org, X-Memfault-Project, X-Org-Slug, X-Project-Slug, X-Nrf-Team-Key',
-        'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-      },
+      headers: corsHeaders(event),
       body: '',
     };
   }
@@ -381,7 +403,7 @@ export async function handler(event) {
         statusCode: primary.res.status,
         headers: {
           'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
+          ...corsHeaders(event),
           'X-Proxy-Upstream': `${mapped.host}${mapped.path}`,
         },
         body: typeof primary.data === 'string' ? JSON.stringify({ raw: primary.data }) : JSON.stringify(primary.data),
@@ -412,7 +434,7 @@ export async function handler(event) {
       statusCode: res.status,
       headers: {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
+        ...corsHeaders(event),
         'X-Proxy-Upstream': url,
       },
       body: typeof out === 'string' ? JSON.stringify({ raw: out }) : JSON.stringify(out),

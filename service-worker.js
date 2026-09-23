@@ -1,11 +1,11 @@
-const CACHE = 'thingy91x-v14';
+const CACHE = 'thingy91x-v15';
 const ASSETS = ['./manifest.json', './icon.svg', './styles.css'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
+    caches.keys().then(keys => Promise.all(keys.map(k => (k === CACHE ? null : caches.delete(k)))))
       .then(() => self.clients.claim())
   );
 });

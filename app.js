@@ -7,10 +7,22 @@
  * Auth: Memfault Basic/OAT + optional team Simple Token (X-Nrf-Team-Key) for msgs/GPS
  * Writes: shadow PATCH + c2d forwarded to api.nrfcloud.com (need Simple Token). Still 501: legacy FOTA
  */
-// Express (localhost + cloudflared tunnel) serves /api; Netlify uses the function proxy
-const NRF_CLOUD_BASE = /netlify\.app$/i.test(location.hostname)
-    ? '/.netlify/functions/nrfcloud'
-    : '/api';
+// API base by host:
+//  - localhost / 127.0.0.1          → /api (local Express)
+//  - *.netlify.app                  → /.netlify/functions/nrfcloud
+//  - *.github.io / other public HTTPS → absolute Netlify function (CORS)
+//  - trycloudflare / same-origin tunnel → /api
+const NETLIFY_FN = 'https://thingy91x-x-dashboard.netlify.app/.netlify/functions/nrfcloud';
+function resolveNrfCloudBase() {
+    const h = location.hostname;
+    if (h === 'localhost' || h === '127.0.0.1') return '/api';
+    if (/netlify\.app$/i.test(h)) return '/.netlify/functions/nrfcloud';
+    if (/github\.io$/i.test(h)) return NETLIFY_FN;
+    if (/trycloudflare\.com$/i.test(h)) return '/api';
+    if (location.protocol === 'https:') return NETLIFY_FN;
+    return '/api';
+}
+const NRF_CLOUD_BASE = resolveNrfCloudBase();
 
 const DEVICE_DEFAULT = '50423451-3737-4337-80fc-110bddf418ff';
 let config = {
@@ -187,8 +199,17 @@ async function getMessages(id, limit = 50) {
 }
 async function fetchSerialTelemetry() {
     try {
-        const base = NRF_CLOUD_BASE.replace(/\/api$/, '');
-        const headers = { cache: undefined };
+        // Serial bridge lives only on local Express. Skip quietly on github.io / absolute Netlify.
+        if (/^https?:\/\//i.test(NRF_CLOUD_BASE) || /github\.io$/i.test(location.hostname)) {
+            return null;
+        }
+        // Local /api or Netlify same-origin: hit /api/serial/telemetry (Netlify redirects to fn; 404 ok)
+        let origin = '';
+        if (NRF_CLOUD_BASE === '/api' || NRF_CLOUD_BASE.startsWith('/.netlify')) {
+            origin = '';
+        } else {
+            origin = '';
+        }
         const h = { 'Cache-Control': 'no-store' };
         const auth = buildAuthHeader();
         if (auth) {
@@ -200,7 +221,7 @@ async function fetchSerialTelemetry() {
         }
         if (config.deviceId) h['X-Device-Id'] = config.deviceId;
         const q = config.deviceId ? `?deviceId=${encodeURIComponent(config.deviceId)}` : '';
-        const res = await fetch(`${base}/api/serial/telemetry${q}`, { cache: 'no-store', headers: h });
+        const res = await fetch(`${origin}/api/serial/telemetry${q}`, { cache: 'no-store', headers: h });
         if (!res.ok) return null;
         const data = await res.json();
         lastSerial = data;
@@ -867,6 +888,9 @@ elements.exportShadow?.addEventListener('click', () => {
 
 document.addEventListener('DOMContentLoaded', () => {
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('service-worker.js?v=8').catch(() => {});
+    if ('serviceWorker' in navigator) {
+        const swHref = new URL('service-worker.js?v=15', document.baseURI || location.href).href;
+        navigator.serviceWorker.register(swHref).catch(() => {});
+    }
     init(); loadFleet(false);
 });
