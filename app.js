@@ -67,6 +67,7 @@ const elements = {
     netMccMnc: $('netMccMnc'), netMode: $('netMode'), netSupportedBands: $('netSupportedBands'),
     netTac: $('netTac'), netCellId: $('netCellId'), netUeMode: $('netUeMode'), netIp: $('netIp'),
     netSnr: $('netSnr'), netWifi: $('netWifi'), netSource: $('netSource'),
+    netImei: $('netImei'), netIccid: $('netIccid'), netImsi: $('netImsi'),
     centerMap: $('centerMap'), toggleTrail: $('toggleTrail'), trailStatus: $('trailStatus'), trailPoints: $('trailPoints'), trailRange: $('trailRange'),
     configModal: $('configModal'), apiKey: $('apiKey'), teamApiKey: $('teamApiKey'), userEmail: $('userEmail'), orgSlug: $('orgSlug'), projectSlug: $('projectSlug'), deviceIdInput: $('deviceIdInput'),
     saveConfig: $('saveConfig'), cancelConfig: $('cancelConfig'), configBtn: $('configBtn'), closeModal: $('closeModal'),
@@ -172,7 +173,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=21#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=22#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -535,6 +536,9 @@ function applySerialOverlay(fromMsg, parsed, serial) {
     take('cellId', serial.cellId || serial.eciDec || serial.eci);
     take('wifiApCount', serial.wifiApCount);
     take('wifiStatus', serial.wifiStatus);
+    take('imei', serial.imei);
+    take('iccid', serial.iccid);
+    take('imsi', serial.imsi);
     if (Array.isArray(serial.wifiAps) && serial.wifiAps.length) { p.wifiAps = serial.wifiAps; used = true; }
     if (serial.operator || serial.mccMnc || serial.band != null || serial.rsrp != null || serial.ipAddress)
         telemetrySource.net = telemetrySource.net || 'serial';
@@ -697,24 +701,93 @@ function serialIsHealthy(serial) {
 function extractFromMessages(items) {
     const list = Array.isArray(items) ? items : [];
     const byApp = {};
-    for (const it of list) { const a = it.message?.appId || it.appId || it.app_id || 'UNKNOWN'; if (!byApp[a]) byApp[a] = it; }
+    for (const it of list) {
+        const a = it.message?.appId || it.appId || it.app_id || 'UNKNOWN';
+        if (!byApp[a]) byApp[a] = it;
+    }
     const out = {};
-    const pick = (o, ...ks) => { if (o == null) return undefined; if (typeof o === 'number') return o; if (typeof o !== 'object') return undefined; for (const k of ks) if (o[k] !== undefined) return o[k]; return undefined; };
-    for (const [a, it] of Object.entries(byApp)) { const m = it.message ?? it.data ?? {}; out[a] = { raw: m, data: m.data ?? m, receivedAt: it.receivedAt || it.received_at || it.ts }; }
+    const pick = (o, ...ks) => {
+        if (o == null) return undefined;
+        if (typeof o === 'number' || typeof o === 'string') return o;
+        if (typeof o !== 'object') return undefined;
+        for (const k of ks) if (o[k] !== undefined && o[k] !== null) return o[k];
+        return undefined;
+    };
+    const asNum = (v) => {
+        if (v == null || v === '') return undefined;
+        if (typeof v === 'string') {
+            const t = v.trim();
+            // RSRP schema: string like "-95" or "-95.0"
+            if (/^-?\d+(\.\d+)?$/.test(t)) {
+                const n = Number(t);
+                return Number.isFinite(n) ? n : undefined;
+            }
+        }
+        return num(v);
+    };
+    for (const [a, it] of Object.entries(byApp)) {
+        const m = it.message ?? it.data ?? {};
+        out[a] = { raw: m, data: m.data ?? m, receivedAt: it.receivedAt || it.received_at || it.ts };
+    }
     const g = out.GNSS?.data ?? out.GPS?.data, t = out.TEMP?.data, h = out.HUMID?.data ?? out.HUMIDITY?.data,
         p = out.AIR_PRESS?.data ?? out.PRESSURE?.data, r = out.RSRP?.data,
         dev = out.DEVICE?.data, bat = out.BATTERY?.data ?? out.BAT?.data,
         env = out.ENV?.data ?? out.ENVIRONMENT?.data;
+    const scell = out.SCELL?.data;
+    const cellPos = out.CELL_POS?.data;
+    const lte0 = Array.isArray(cellPos?.lte) && cellPos.lte.length ? cellPos.lte[0] : null;
+    const niMsg = (dev && typeof dev === 'object' ? (dev.networkInfo || dev.network || null) : null) || null;
+    const simMsg = (dev && typeof dev === 'object' ? (dev.simInfo || dev.sim || null) : null) || null;
+    const diMsg = (dev && typeof dev === 'object' ? (dev.deviceInfo || null) : null) || null;
+
+    // Prefer DEVICE.networkInfo; fall back to SCELL / CELL_POS LTE cell
+    const mcc = asNum(pick(niMsg ?? {}, 'mcc') ?? pick(scell ?? {}, 'mcc') ?? pick(lte0 ?? {}, 'mcc'));
+    const mnc = asNum(pick(niMsg ?? {}, 'mnc') ?? pick(scell ?? {}, 'mnc') ?? pick(lte0 ?? {}, 'mnc'));
+    let mccMnc = pick(niMsg ?? {}, 'mccmnc', 'mccMnc', 'MCCMNC') ?? null;
+    if (mccMnc == null && mcc != null && mnc != null) {
+        const mncStr = String(Math.trunc(mnc));
+        mccMnc = `${Math.trunc(mcc)}${mncStr.padStart(mncStr.length >= 3 ? 3 : 2, '0')}`;
+        // Keep common BR style: 72410 (2-digit MNC) when mnc < 100
+        if (mnc < 100) mccMnc = `${Math.trunc(mcc)}${String(Math.trunc(mnc)).padStart(2, '0')}`;
+    }
+    const tacRaw = pick(niMsg ?? {}, 'areaCode', 'tac', 'TAC') ?? pick(scell ?? {}, 'tac') ?? pick(lte0 ?? {}, 'tac');
+    const cellRaw = pick(niMsg ?? {}, 'cellID', 'cellId', 'eci', 'ECI') ?? pick(scell ?? {}, 'eci') ?? pick(lte0 ?? {}, 'eci');
+    let rsrpVal = r != null ? (typeof r === 'number' ? r : asNum(typeof r === 'object' ? pick(r, 'value', 'rsrp', 'v') : r)) : undefined;
+    if (rsrpVal == null) rsrpVal = asNum(pick(niMsg ?? {}, 'rsrp') ?? pick(scell ?? {}, 'rsrp') ?? pick(lte0 ?? {}, 'rsrp') ?? pick(dev ?? {}, 'rsrp'));
+    let rsrqVal = asNum(pick(dev ?? {}, 'rsrq') ?? pick(out.RSRQ?.data ?? {}, 'value', 'v', 'rsrq') ?? pick(lte0 ?? {}, 'rsrq') ?? pick(niMsg ?? {}, 'rsrq'));
+
     const latestAt = list[0]?.receivedAt || list[0]?.received_at || list[0]?.ts;
+    const netAt = out.DEVICE?.receivedAt || out.SCELL?.receivedAt || out.CELL_POS?.receivedAt
+        || out.RSRP?.receivedAt || out.RSRQ?.receivedAt || null;
+
     return {
-        byApp, latestAt,
+        byApp, latestAt, netAt,
         gps: g ? { lat: num(pick(g, 'lat', 'latitude', 'v')), lon: num(pick(g, 'lng', 'lon', 'longitude', 'v')), accuracy: num(pick(g, 'acc', 'accuracy', 'uncertainty')), speed: num(pick(g, 'spd', 'speed')), altitude: num(pick(g, 'alt', 'altitude')), satellites: num(pick(g, 'sats', 'satellites', 'numSat')) } : {},
         temp: num(typeof t === 'number' ? t : pick(t ?? env ?? {}, 'value', 'temp', 'temperature', 'v')),
         hum: num(typeof h === 'number' ? h : pick(h ?? env ?? {}, 'value', 'humidity', 'hum', 'v')),
         press: num(typeof p === 'number' ? p : pick(p ?? env ?? {}, 'value', 'pressure', 'press', 'v')),
-        rsrp: r != null ? (typeof r === 'number' ? r : pick(r, 'value', 'rsrp', 'v')) : num(pick(dev ?? {}, 'rsrp')),
-        rsrq: pick(dev ?? {}, 'rsrq') ?? pick(out.RSRQ?.data ?? {}, 'value', 'v'),
-        batteryV: num(pick(dev ?? bat ?? {}, 'batteryVoltage', 'batV', 'voltage', 'v')),
+        rsrp: rsrpVal,
+        rsrq: rsrqVal,
+        // Cloud network from DEVICE / SCELL / CELL_POS
+        mccMnc: mccMnc != null ? String(mccMnc) : undefined,
+        mcc, mnc,
+        operator: (mccMnc ? plmnHint(mccMnc) : null) || undefined,
+        networkMode: pick(niMsg ?? {}, 'networkMode', 'accessTech') || undefined,
+        band: asNum(pick(niMsg ?? {}, 'currentBand', 'band')),
+        supportedBands: pick(niMsg ?? {}, 'supportedBands', 'supportedBand') || undefined,
+        ueMode: pick(niMsg ?? {}, 'ueMode', 'UEMode'),
+        ipAddress: pick(niMsg ?? {}, 'ipAddress', 'ip', 'IPV4') || undefined,
+        tac: tacRaw != null ? tacRaw : undefined,
+        tacDec: asNum(tacRaw),
+        eci: cellRaw != null ? cellRaw : undefined,
+        eciDec: asNum(cellRaw),
+        cellId: asNum(cellRaw) ?? cellRaw,
+        snr: asNum(pick(niMsg ?? {}, 'snr', 'SINR')),
+        iccid: pick(simMsg ?? {}, 'iccid', 'ICCID') || undefined,
+        imsi: pick(simMsg ?? {}, 'imsi', 'IMSI') || undefined,
+        uiccMode: pick(simMsg ?? {}, 'uiccMode'),
+        imei: pick(diMsg ?? {}, 'imei', 'IMEI') || undefined,
+        batteryV: num(pick(dev ?? bat ?? {}, 'batteryVoltage', 'batV', 'voltage', 'v') ?? pick(diMsg ?? {}, 'batteryVoltage')),
         batteryPct: (() => {
             // Explicit SoC keys first
             let n = num(pick(bat ?? {}, 'percent', 'percentage', 'SoC', 'soc', 'level'));
@@ -734,10 +807,15 @@ function extractFromMessages(items) {
         accel: out.ACCEL?.data ?? out.MOTION?.data,
         steps: num(pick(out.STEPS?.data ?? out.ACCEL?.data ?? {}, 'steps', 'stepCount', 'value')),
         accelAt: out.ACCEL?.receivedAt || out.MOTION?.receivedAt || out.STEPS?.receivedAt || null,
+        netSourceHint: (niMsg || scell || lte0 || rsrpVal != null) ? 'cloud' : undefined,
     };
 }
+
 function parseDevice(d) {
-    const rep = d.state?.reported ?? {}, di = rep.device?.deviceInfo ?? {}, ni = rep.device?.networkInfo ?? {}, fw = d.firmware ?? {};
+    const rep = d.state?.reported ?? {}, di = rep.device?.deviceInfo ?? {},
+        ni = rep.device?.networkInfo ?? rep.networkInfo ?? {},
+        si = rep.device?.simInfo ?? rep.simInfo ?? {},
+        fw = d.firmware ?? {};
     const bat = rep.device?.batteryStatus ?? rep.battery ?? rep.bat ?? {};
     const id = d.id || d.device_serial || d._memfault?.device_serial;
     const lastSeen = d.$meta?.updatedAt || d.last_seen || d._memfault?.last_seen || d._nrf?.$meta?.updatedAt;
@@ -770,6 +848,22 @@ function parseDevice(d) {
     } else if (eciDec != null) {
         eciHex = Number(eciDec).toString(16).toUpperCase();
     }
+    // Memfault attributes sometimes carry imei
+    const flatAttrs = (() => {
+        const attrs = d._attributes;
+        const list = Array.isArray(attrs) ? attrs : (attrs?.data || attrs?.items || []);
+        const o = {};
+        for (const it of list) {
+            const key = it.string_key || it.metric_config?.string_key || it.key;
+            const val = it.state?.value ?? it.value;
+            if (key != null && val !== undefined) o[key] = val;
+        }
+        return o;
+    })();
+    const imei = di.imei || flatAttrs.imei || d._nrf?.imei || null;
+    const iccid = si.iccid || si.ICCID || flatAttrs.iccid || null;
+    const imsi = si.imsi || si.IMSI || flatAttrs.imsi || null;
+    const hasNi = !!(mccMnc || ni.currentBand != null || ni.cellID != null || ni.areaCode != null || ni.rsrp != null || ni.networkMode);
     return {
         name: d.name || d.nickname || id,
         id,
@@ -796,12 +890,58 @@ function parseDevice(d) {
         snr: num(ni.snr ?? ni.SINR),
         wifiApCount: num(ni.wifiApCount ?? ni.wifiAps),
         wifiStatus: ni.wifiStatus || null,
+        imei: imei ? String(imei) : null,
+        iccid: iccid ? String(iccid) : null,
+        imsi: imsi ? String(imsi) : null,
+        uiccMode: si.uiccMode ?? null,
         batteryV,
         batteryPct,
         hardware: d.hardware_version || d._memfault?.hardware_version,
         nickname: d.nickname || d.name || null,
-        netSourceHint: 'cloud',
+        netSourceHint: hasNi ? 'cloud' : null,
     };
+}
+
+/** Fill Rede gaps from ListMessages (DEVICE/SCELL/CELL_POS/RSRP) when shadow lacks networkInfo. */
+function mergeCloudNetwork(parsed, fromMsg) {
+    if (!fromMsg) return parsed;
+    const p = { ...parsed };
+    let used = false;
+    const take = (key, val) => {
+        if (val == null || val === '') return;
+        if (p[key] == null || p[key] === '' || p[key] === '—') {
+            p[key] = val;
+            used = true;
+        }
+    };
+    take('mccMnc', fromMsg.mccMnc);
+    take('mcc', fromMsg.mcc);
+    take('mnc', fromMsg.mnc);
+    take('operator', fromMsg.operator || (fromMsg.mccMnc ? plmnHint(fromMsg.mccMnc) : null));
+    take('networkMode', fromMsg.networkMode);
+    take('band', fromMsg.band);
+    take('supportedBands', fromMsg.supportedBands);
+    take('ueMode', fromMsg.ueMode);
+    take('ipAddress', fromMsg.ipAddress);
+    take('tac', fromMsg.tac);
+    take('tacDec', fromMsg.tacDec);
+    take('eci', fromMsg.eci);
+    take('eciDec', fromMsg.eciDec);
+    take('cellId', fromMsg.cellId ?? fromMsg.eciDec ?? fromMsg.eci);
+    take('snr', fromMsg.snr);
+    take('imei', fromMsg.imei);
+    take('iccid', fromMsg.iccid);
+    take('imsi', fromMsg.imsi);
+    take('uiccMode', fromMsg.uiccMode);
+    if (p.rsrp == null && fromMsg.rsrp != null) { p.rsrp = fromMsg.rsrp; used = true; }
+    if (p.rsrq == null && fromMsg.rsrq != null) { p.rsrq = fromMsg.rsrq; used = true; }
+    if (p.mccMnc && (!p.operator || String(p.operator) === String(p.mccMnc) || /^\d+$/.test(String(p.operator)))) {
+        const h = plmnHint(p.mccMnc);
+        if (h) p.operator = h;
+    }
+    if (used || fromMsg.netSourceHint) p.netSourceHint = p.netSourceHint || fromMsg.netSourceHint || 'cloud';
+    if (used) telemetrySource.net = telemetrySource.net || 'cloud';
+    return p;
 }
 
 
@@ -948,15 +1088,22 @@ function updateUI(parsed, fromMsg) {
     const wifiTxt = parsed.wifiStatus
         || (parsed.wifiApCount != null ? `${parsed.wifiApCount} APs` : null);
     setText(elements.netWifi, wifiTxt || '—');
+    setText(elements.netImei, parsed.imei || '—');
+    setText(elements.netIccid, parsed.iccid || '—');
+    setText(elements.netImsi, parsed.imsi || '—');
     const src = telemetrySource.net || (lastSerial?.ok ? 'serial' : null) || parsed.netSourceHint || null;
     setText(elements.netSource, src || '—');
 
+    const hasSimFields = !!(parsed.imei || parsed.iccid || parsed.imsi);
     const hasCellFields = !!(mccMnc || parsed.operator || parsed.band != null || parsed.cellId != null
-        || parsed.eci != null || parsed.tac != null || parsed.ipAddress || rsrp != null || parsed.networkMode);
+        || parsed.eci != null || parsed.tac != null || parsed.ipAddress || rsrp != null || parsed.networkMode
+        || hasSimFields);
     const locSrc = String(gps.source || lastSerial?.locationSource || telemetrySource.gps || '').toLowerCase();
     const locWifi = /wifi|wi-?fi/.test(locSrc);
     const online = parsed.connected === true;
     const offline = parsed.connected === false;
+    const onPages = /github\.io|netlify/i.test(location.hostname || '');
+    const noTeam = !config.teamApiKey;
     if (elements.netEmptyHint) {
         if (hasCellFields) {
             elements.netEmptyHint.hidden = true;
@@ -965,15 +1112,19 @@ function updateUI(parsed, fromMsg) {
             elements.netEmptyHint.hidden = false;
             if (locWifi || /wifi/i.test(String(elements.serviceType?.textContent || ''))) {
                 elements.netEmptyHint.textContent = 'Rádio celular não telemetrado neste payload — posição via Wi‑Fi/GNSS na nuvem.';
+            } else if (noTeam && onPages) {
+                elements.netEmptyHint.textContent = 'Sem dados de rede na nuvem — configure a Simple Token (equipe) na engrenagem para ListMessages (DEVICE/SCELL/RSRP). ATT 1.5 não publica networkInfo no shadow; USB serial só no Mac.';
             } else if (offline) {
-                elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline ou sem shadow de networkInfo.';
+                elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline, sem DEVICE/SCELL nas msgs e sem networkInfo no shadow (ATT 1.5).';
             } else {
-                elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline ou sem shadow de networkInfo.';
+                elements.netEmptyHint.textContent = 'Sem networkInfo no shadow (ATT 1.5) e sem DEVICE/SCELL/RSRP em ListMessages. No Mac, USB serial preenche a Rede.';
             }
         }
     }
     const netTs = hasCellFields
-        ? (lastSerial?.updatedAt && telemetrySource.net === 'serial' ? lastSerial.updatedAt : (fromMsg.latestAt || ls))
+        ? (lastSerial?.updatedAt && telemetrySource.net === 'serial'
+            ? lastSerial.updatedAt
+            : (fromMsg.netAt || fromMsg.latestAt || ls))
         : null;
     setDataAge(elements.netAge, hasCellFields ? netTs : null, {
         missing: hasCellFields ? 'sem timestamp' : (offline ? 'offline' : 'sem networkInfo'),
@@ -1510,6 +1661,8 @@ async function fetchAndUpdate() {
         ]);
         lastDeviceRaw = device; lastMessages = messages;
         let parsed = parseDevice(device), fromMsg = extractFromMessages(messages);
+        parsed = mergeCloudNetwork(parsed, fromMsg);
+        if (fromMsg.rsrp != null || fromMsg.mccMnc || fromMsg.netSourceHint) telemetrySource.net = telemetrySource.net || 'cloud';
         const overlay = applySerialOverlay(fromMsg, parsed, serial || lastSerial);
         fromMsg = overlay.fromMsg; parsed = overlay.parsed;
         const ser = serial || lastSerial;
@@ -1835,10 +1988,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=21', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=22', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
         const bustKey = 'thingy_sw_bust_v21';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v21').map(k => caches.delete(k)))).catch(() => {});
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v22').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

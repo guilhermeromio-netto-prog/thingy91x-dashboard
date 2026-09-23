@@ -159,6 +159,29 @@ function normalizeDevice(raw, extras = {}) {
     if (modemFw && !reported.device.deviceInfo.modemFirmware) reported.device.deviceInfo.modemFirmware = modemFw;
     if (flat.imei && !reported.device.deviceInfo.imei) reported.device.deviceInfo.imei = flat.imei;
   }
+  // Soft-map Memfault attribute keys into networkInfo / simInfo when shadow empty
+  if (reported.device) {
+    const ni = reported.device.networkInfo || (reported.device.networkInfo = {});
+    const si = reported.device.simInfo || (reported.device.simInfo = {});
+    const mapNi = [
+      ['mccmnc', ['mccmnc', 'mcc_mnc', 'plmn']],
+      ['currentBand', ['current_band', 'lte_band', 'band']],
+      ['areaCode', ['area_code', 'tac']],
+      ['cellID', ['cell_id', 'cellid', 'eci']],
+      ['networkMode', ['network_mode', 'access_tech']],
+      ['rsrp', ['rsrp']],
+      ['rsrq', ['rsrq']],
+      ['ipAddress', ['ip_address', 'ip']],
+    ];
+    for (const [dst, keys] of mapNi) {
+      if (ni[dst] != null && ni[dst] !== '') continue;
+      for (const k of keys) {
+        if (flat[k] != null && flat[k] !== '') { ni[dst] = flat[k]; break; }
+      }
+    }
+    if (!si.iccid && (flat.iccid || flat.sim_iccid)) si.iccid = flat.iccid || flat.sim_iccid;
+    if (!si.imsi && (flat.imsi || flat.sim_imsi)) si.imsi = flat.imsi || flat.sim_imsi;
+  }
   return {
     id: String(serial),
     name: d.nickname || d.name || extras.nrfName || String(serial),
@@ -277,22 +300,28 @@ async function upstreamFetch(url, method, auth, body, label, { tryBearerFallback
   return last;
 }
 
-async function enrichDevice(auth, org, project, deviceId, memfaultRaw) {
+async function enrichDevice(memfaultAuth, nrfAuth, org, project, deviceId, memfaultRaw) {
   const extras = {};
   const base = projectBase(org, project);
   try {
     const attrUrl = `${MEMFAULT_HOST}${base}/devices/${encodeURIComponent(deviceId)}/attributes?q=*`;
-    const { res, data } = await upstreamFetch(attrUrl, 'GET', auth, undefined, 'MEMFAULT attributes');
+    const { res, data } = await upstreamFetch(attrUrl, 'GET', memfaultAuth, undefined, 'MEMFAULT attributes');
     if (res.ok) extras.attributes = data;
   } catch { /* soft */ }
 
+  // Prefer team Simple Token for FetchDevice(includeState) — User OAT often omits full shadow
   let nrfRaw = null;
+  const authOrder = [...new Set([nrfAuth, memfaultAuth].filter(Boolean))];
   for (const qs of ['?includeState=true', '']) {
-    try {
-      const url = `${NRF_HOST}/v1/devices/${encodeURIComponent(deviceId)}${qs}`;
-      const { res, data } = await upstreamFetch(url, 'GET', auth, undefined, 'NRF FetchDevice', { tryBearerFallback: true });
-      if (res.ok && data) { nrfRaw = data; break; }
-    } catch { /* soft */ }
+    let got = false;
+    for (const a of authOrder) {
+      try {
+        const url = `${NRF_HOST}/v1/devices/${encodeURIComponent(deviceId)}${qs}`;
+        const { res, data } = await upstreamFetch(url, 'GET', a, undefined, 'NRF FetchDevice', { tryBearerFallback: true });
+        if (res.ok && data) { nrfRaw = data; got = true; break; }
+      } catch { /* soft */ }
+    }
+    if (got) break;
   }
   if (nrfRaw) {
     extras.nrfRaw = nrfRaw;
@@ -427,7 +456,7 @@ export async function handler(event) {
     if (res.ok && typeof data === 'object' && data !== null) {
       if (mapped.normalize === 'list') out = normalizeList(data);
       else if (mapped.normalize === 'device' && mapped.deviceId) {
-        out = await enrichDevice(auth, org, project, mapped.deviceId, data);
+        out = await enrichDevice(auth, nrfAuth, org, project, mapped.deviceId, data);
       }
     }
     return {
