@@ -52,6 +52,7 @@ let telemetrySource = { env: null, battery: null, net: null, gps: null };
 let geo = JSON.parse(localStorage.getItem('thingy_geo') || 'null');
 let geoCircle = null, geoInside = null;
 const logCount = { api: 0, err: 0 };
+let lastPollAuthFail = false;
 
 const $ = id => document.getElementById(id);
 const elements = {
@@ -69,6 +70,7 @@ const elements = {
     centerMap: $('centerMap'), toggleTrail: $('toggleTrail'), trailStatus: $('trailStatus'), trailPoints: $('trailPoints'), trailRange: $('trailRange'),
     configModal: $('configModal'), apiKey: $('apiKey'), teamApiKey: $('teamApiKey'), userEmail: $('userEmail'), orgSlug: $('orgSlug'), projectSlug: $('projectSlug'), deviceIdInput: $('deviceIdInput'),
     saveConfig: $('saveConfig'), cancelConfig: $('cancelConfig'), configBtn: $('configBtn'), closeModal: $('closeModal'),
+    authBanner: $('authBanner'), authBannerBtn: $('authBannerBtn'), copyPairingLink: $('copyPairingLink'), configError: $('configError'),
     logPanel: $('logPanel'), logFilter: $('logFilter'), exportLog: $('exportLog'), clearLog: $('clearLog'),
     connState: $('connState'), connLastSeen: $('connLastSeen'), connLastMsg: $('connLastMsg'), connMsgCount: $('connMsgCount'), connLatency: $('connLatency'), connPoll: $('connPoll'),
     cmdLed: $('cmdLed'), cmdGpsInterval: $('cmdGpsInterval'), cmdBuzzer: $('cmdBuzzer'), cmdCustom: $('cmdCustom'), sendDesired: $('sendDesired'), sendPing: $('sendPing'),
@@ -109,7 +111,14 @@ function download(name, content, type = 'application/json') {
     a.href = URL.createObjectURL(new Blob([content], { type })); a.download = name; a.click();
 }
 
-/* ---------- Modal ---------- */
+/* ---------- Modal / auth banner / pairing ---------- */
+function setConfigError(msg) {
+    const el = elements.configError;
+    if (!el) return;
+    if (!msg) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = msg;
+}
 function showModal() {
     // Não sobrescrever campos se o modal já está aberto (poll 401 apagava o que o usuário digitava)
     const alreadyOpen = elements.configModal?.classList.contains('show');
@@ -120,25 +129,149 @@ function showModal() {
         if (elements.orgSlug) elements.orgSlug.value = config.orgSlug || 'telekom';
         if (elements.projectSlug) elements.projectSlug.value = config.projectSlug || 'nrf-project';
         if (elements.deviceIdInput) elements.deviceIdInput.value = config.deviceId;
+        setConfigError('');
     }
     elements.configModal?.classList.add('show');
 }
-function hideModal() { elements.configModal?.classList.remove('show'); }
-function saveConfig() {
+function hideModal() { elements.configModal?.classList.remove('show'); setConfigError(''); }
+function updateAuthBanner() {
+    const show = !config.apiKey || lastPollAuthFail;
+    const el = elements.authBanner;
+    if (el) el.hidden = !show;
+    document.body.classList.toggle('has-auth-banner', !!show);
+}
+function persistConfigToStorage() {
+    try {
+        localStorage.setItem('nrf_api_key', config.apiKey);
+        localStorage.setItem('nrf_team_api_key', config.teamApiKey || '');
+        localStorage.setItem('nrf_user_email', config.email);
+        localStorage.setItem('nrf_org_slug', config.orgSlug);
+        localStorage.setItem('nrf_project_slug', config.projectSlug);
+        localStorage.setItem('nrf_device_id', config.deviceId);
+        return true;
+    } catch (e) {
+        alert('Não foi possível salvar neste navegador (modo privado / bloqueio de armazenamento). Desative o modo privado ou permita localStorage e tente de novo.');
+        return false;
+    }
+}
+function b64urlEncode(str) {
+    const b64 = btoa(unescape(encodeURIComponent(str)));
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+    let b64 = String(s).replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    return decodeURIComponent(escape(atob(b64)));
+}
+function buildPairingUrl() {
+    const payload = {
+        apiKey: config.apiKey || '',
+        teamApiKey: config.teamApiKey || '',
+        email: config.email || '',
+        orgSlug: config.orgSlug || 'telekom',
+        projectSlug: config.projectSlug || 'nrf-project',
+        deviceId: config.deviceId || '',
+    };
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=21#cfg=';
+    return base + b64urlEncode(JSON.stringify(payload));
+}
+async function copyPairingLink() {
+    // Sync form → config first (may not have saved yet)
+    config.apiKey = (elements.apiKey?.value.trim() || config.apiKey || '').replace(/^(Bearer|Basic)\s+/i, '');
+    config.teamApiKey = (elements.teamApiKey?.value.trim() || config.teamApiKey || '').replace(/^(Bearer|Basic)\s+/i, '');
+    config.email = elements.userEmail?.value.trim() || config.email || '';
+    config.orgSlug = elements.orgSlug?.value.trim() || config.orgSlug || 'telekom';
+    config.projectSlug = elements.projectSlug?.value.trim() || config.projectSlug || 'nrf-project';
+    config.deviceId = elements.deviceIdInput?.value.trim() || config.deviceId || '';
+    if (!config.apiKey) {
+        setConfigError('Preencha User API Key/OAT antes de copiar o link.');
+        return;
+    }
+    const url = buildPairingUrl();
+    try {
+        await navigator.clipboard.writeText(url);
+        log('ok', 'Link de pairing copiado — abra no celular');
+        setConfigError('');
+        showToast('Link copiado — abra no celular');
+    } catch (e) {
+        // Fallback: prompt for manual copy
+        try { window.prompt('Copie o link (contém segredos):', url); } catch { /* ignore */ }
+        log('warn', 'Clipboard bloqueado — use o prompt para copiar');
+    }
+}
+function showToast(msg, ms = 3200) {
+    let t = document.getElementById('importToast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'importToast';
+        t.className = 'toast-import';
+        document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => { t.hidden = true; }, ms);
+}
+function importConfigFromHash() {
+    const hash = location.hash || '';
+    if (!hash.startsWith('#cfg=')) return false;
+    try {
+        const raw = b64urlDecode(hash.slice(5));
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object') throw new Error('payload inválido');
+        if (data.apiKey) config.apiKey = String(data.apiKey).replace(/^(Bearer|Basic)\s+/i, '');
+        if (data.teamApiKey != null) config.teamApiKey = String(data.teamApiKey).replace(/^(Bearer|Basic)\s+/i, '');
+        if (data.email != null) config.email = String(data.email);
+        if (data.orgSlug) config.orgSlug = String(data.orgSlug);
+        if (data.projectSlug) config.projectSlug = String(data.projectSlug);
+        if (data.deviceId) config.deviceId = String(data.deviceId);
+        if (!persistConfigToStorage()) return false;
+        history.replaceState(null, '', location.pathname + location.search);
+        log('ok', 'Chaves importadas neste celular');
+        showToast('Chaves importadas neste celular');
+        lastPollAuthFail = false;
+        updateAuthBanner();
+        return true;
+    } catch (e) {
+        log('err', 'Falha ao importar #cfg=', e.message);
+        try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
+        return false;
+    }
+}
+async function saveConfig() {
     config.apiKey = (elements.apiKey?.value.trim() || '').replace(/^(Bearer|Basic)\s+/i, '');
     config.teamApiKey = (elements.teamApiKey?.value.trim() || '').replace(/^(Bearer|Basic)\s+/i, '');
     config.email = elements.userEmail?.value.trim() || '';
     config.orgSlug = elements.orgSlug?.value.trim() || 'telekom';
     config.projectSlug = elements.projectSlug?.value.trim() || 'nrf-project';
     config.deviceId = elements.deviceIdInput?.value.trim() || '';
-    localStorage.setItem('nrf_api_key', config.apiKey);
-    localStorage.setItem('nrf_team_api_key', config.teamApiKey || '');
-    localStorage.setItem('nrf_user_email', config.email);
-    localStorage.setItem('nrf_org_slug', config.orgSlug);
-    localStorage.setItem('nrf_project_slug', config.projectSlug);
-    localStorage.setItem('nrf_device_id', config.deviceId);
-    log('info', 'Configuração salva', `${config.orgSlug}/${config.projectSlug} · ${config.deviceId || 'auto'}`);
-    hideModal(); init();
+    setConfigError('');
+    if (!config.apiKey) {
+        setConfigError('User API Key / OAT é obrigatório.');
+        return;
+    }
+    if (!persistConfigToStorage()) return;
+    const btn = elements.saveConfig;
+    const prevLabel = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = 'Testando…'; }
+    try {
+        await nrfFetch('/devices?pageLimit=1');
+        lastPollAuthFail = false;
+        updateAuthBanner();
+        log('ok', 'Conexão OK — configuração salva', `${config.orgSlug}/${config.projectSlug} · ${config.deviceId || 'auto'}`);
+        hideModal();
+        setStatus(true, 'Conectado');
+        init();
+    } catch (e) {
+        lastPollAuthFail = /401|403|Authorization|chave|Nenhuma chave/i.test(e.message);
+        updateAuthBanner();
+        const msg = e.message || 'Falha ao conectar';
+        setConfigError(msg);
+        log('err', 'Teste de conexão falhou', msg);
+        // keep modal open — do not pretend success
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'Salvar e Conectar'; }
+    }
 }
 
 /* ---------- Status ---------- */
@@ -283,16 +416,20 @@ async function nrfFetch(path, options = {}) {
         'Content-Type': 'application/json',
         'X-Memfault-Org': config.orgSlug || 'telekom',
         'X-Memfault-Project': config.projectSlug || 'nrf-project',
+        // Dual auth: some mobile/CDN paths strip Authorization; Netlify resolveAuth reads these
+        'X-User-Api-Key': config.apiKey || '',
         ...options.headers,
     };
     if (config.email) headers['X-User-Email'] = config.email;
     if (config.teamApiKey) headers['X-Nrf-Team-Key'] = config.teamApiKey;
-    Object.keys(headers).forEach(k => headers[k] === undefined && delete headers[k]);
+    Object.keys(headers).forEach(k => (headers[k] === undefined || headers[k] === '') && k !== 'X-User-Api-Key' && delete headers[k]);
+    if (!headers['X-User-Api-Key']) delete headers['X-User-Api-Key'];
     log('api', `→ ${options.method || 'GET'} ${path}`);
     const res = await fetch(`${NRF_CLOUD_BASE}${path}`, { ...options, headers });
     const latency = Date.now() - t0;
     if (!res.ok) {
         const eb = await res.json().catch(() => ({}));
+        const errCode = typeof eb.error === 'string' ? eb.error : '';
         const raw = eb.message ?? eb.error ?? eb.detail ?? eb.feature ?? eb.title ?? null;
         let msg;
         if (raw == null || raw === '') msg = `HTTP ${res.status}`;
@@ -301,7 +438,11 @@ async function nrfFetch(path, options = {}) {
             msg = raw.message || raw.error || raw.detail || raw.code || JSON.stringify(raw).slice(0, 120);
         } else msg = String(raw);
         if (/401|403/.test(String(res.status))) {
-            msg = 'Não autorizado — abra a engrenagem e cole User API Key/OAT (e Simple Token da equipe se tiver). Neste celular as chaves não vêm do Mac.';
+            if (errCode === 'Missing Authorization' || /Missing Authorization/i.test(String(msg))) {
+                msg = 'Nenhuma chave enviada — abra Configurar e salve.';
+            } else {
+                msg = 'Chave rejeitada — confira User API Key/OAT e e-mail (Basic) ou OAT sem e-mail.';
+            }
         }
         log('err', `✕ ${path} [${res.status}] ${msg}`, `${latency}ms`);
         throw new Error(`HTTP ${res.status}: ${msg}`);
@@ -337,6 +478,7 @@ async function fetchSerialTelemetry() {
             h['Authorization'] = auth;
             h['X-Memfault-Org'] = config.orgSlug || 'telekom';
             h['X-Memfault-Project'] = config.projectSlug || 'nrf-project';
+            if (config.apiKey) h['X-User-Api-Key'] = config.apiKey;
             if (config.email) h['X-User-Email'] = config.email;
             if (config.teamApiKey) h['X-Nrf-Team-Key'] = config.teamApiKey;
         }
@@ -1354,7 +1496,7 @@ function checkGeofence(lat, lon) {
 async function fetchAndUpdate() {
     // Pausar poll enquanto o modal de config está aberto
     if (elements.configModal?.classList.contains('show')) return;
-    if (!config.apiKey) { showModal(); return; }
+    if (!config.apiKey) { lastPollAuthFail = true; updateAuthBanner(); showModal(); return; }
     try {
         if (!config.deviceId || !deviceList.length) await loadFleet(true);
         if (!config.deviceId) throw new Error('Sem dispositivos na conta');
@@ -1432,6 +1574,8 @@ async function fetchAndUpdate() {
             log(parsed.connected ? 'ok' : 'warn', parsed.connected ? 'CONECTOU' : 'DESCONECTOU', parsed.session || '');
         lastConnected = parsed.connected;
         const on = parsed.connected === true;
+        lastPollAuthFail = false;
+        updateAuthBanner();
         setStatus(on, on ? 'Conectado' : parsed.connected === false ? 'Offline' : 'Desconhecido');
         updateConnPanel({ connected: parsed.connected, lastSeen: parsed.lastSeen, lastMsg: fromMsg.latestAt || serial?.updatedAt, msgCount: messages.length, latency });
         updateUI(parsed, fromMsg); renderMsgTable(messages); updateSourceBadge();
@@ -1444,8 +1588,15 @@ async function fetchAndUpdate() {
         // Refresh trail every successful poll (failures logged once)
         await loadTrail({ quiet: true });
     } catch (e) {
-        const short = /401|403/.test(e.message) ? 'Erro: 401 — configure a engrenagem neste celular' : `Erro: ${e.message.slice(0, 48)}`; log('err', `Poll: ${e.message}`); setStatus(false, short);
-        if (/401|403/.test(e.message)) showModal();
+        const isAuth = /401|403|Nenhuma chave|Chave rejeitada|Sem API key/i.test(e.message);
+        const short = isAuth ? 'Erro: 401 — configure a engrenagem neste celular' : `Erro: ${e.message.slice(0, 48)}`;
+        log('err', `Poll: ${e.message}`);
+        setStatus(false, short);
+        if (isAuth) {
+            lastPollAuthFail = true;
+            updateAuthBanner();
+            showModal();
+        }
     }
 }
 async function loadTrail(opts = {}) {
@@ -1517,6 +1668,7 @@ async function loadTrail(opts = {}) {
     }
 }
 function init() {
+    updateAuthBanner();
     if (!config.apiKey) { showModal(); log('warn', 'Sem User API Key / OAT'); return; }
     if (!config.email) log('info', 'Sem e-mail — usando Bearer (OAT) no Memfault.');
     if (!config.teamApiKey) log('warn', 'Sem API Key da equipe — GPS/sensores (ListMessages) vão dar 401.');
@@ -1528,10 +1680,15 @@ function init() {
 }
 
 /* ---------- wiring ---------- */
-elements.saveConfig?.addEventListener('click', saveConfig);
+elements.saveConfig?.addEventListener('click', () => { saveConfig(); });
 elements.cancelConfig?.addEventListener('click', hideModal);
 elements.closeModal?.addEventListener('click', hideModal);
 elements.configBtn?.addEventListener('click', showModal);
+elements.authBannerBtn?.addEventListener('click', showModal);
+elements.copyPairingLink?.addEventListener('click', () => { copyPairingLink(); });
+elements.connectionStatus?.addEventListener('click', () => {
+    if (elements.connectionStatus?.classList.contains('error') || !config.apiKey || lastPollAuthFail) showModal();
+});
 elements.centerMap?.addEventListener('click', () => { try { map.setView(marker.getLatLng(), 15); } catch { log('warn', 'Sem posição ainda'); } });
 elements.toggleTrail?.addEventListener('click', () => {
     trailEnabled = !trailEnabled;
@@ -1675,11 +1832,13 @@ elements.deviceName?.addEventListener('blur', commitAliasFromHero);
 document.addEventListener('DOMContentLoaded', () => {
 
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
+    // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
+    importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=20', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=21', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v20';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v20').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v21';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v21').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }
@@ -1697,5 +1856,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }).catch(() => {});
     }
+    updateAuthBanner();
     init(); loadFleet(false);
 });

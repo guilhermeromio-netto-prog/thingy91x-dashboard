@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=20">
+    <link rel="stylesheet" href="styles.css?v=21">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -31,7 +31,7 @@
                     <span class="dot" id="connDot"></span>
                     <span class="label" id="connLabel">Conectando...</span>
                 </div>
-                <button class="btn btn-ghost" id="configBtn" aria-label="Configurações">
+                <button class="btn btn-ghost btn-config" id="configBtn" aria-label="Configurações">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 </button>
             </div>
@@ -314,6 +314,13 @@
             </div>
         </main>
 
+
+    <!-- Sticky auth banner (mobile) -->
+    <div id="authBanner" class="auth-banner" hidden role="status">
+        <span class="auth-banner-text">Sem acesso à nuvem</span>
+        <button type="button" class="btn btn-primary btn-sm" id="authBannerBtn">Configurar agora</button>
+    </div>
+
         <footer class="footer">
             <span>Deutsche Telekom AG — IoT Dashboard</span>
             <span id="version">v1.0.0</span>
@@ -354,10 +361,13 @@
                     <label for="deviceIdInput">Device ID (UUID / CoAP client ID)</label>
                     <input type="text" id="deviceIdInput" placeholder="50423451-3737-4337-80fc-110bddf418ff" />
                 </div>
-                <p class="modal-link" id="mobileAuthHint" style="color:#E20074;font-weight:600">No celular: as chaves não sincronizam com o Mac — cole de novo User API Key/OAT (obrigatório) e, se tiver, a API Key da equipe.</p>
+                <p class="modal-link" id="mobileAuthHint" style="color:#E20074;font-weight:600">No celular: as chaves não sincronizam com o Mac — use <strong>Copiar link pro celular</strong> no Mac, ou cole as chaves aqui.</p>
+                <p class="modal-warn" id="pairingWarn">O link contém segredos — use só no seu telefone.</p>
+                <div id="configError" class="config-error" hidden role="alert"></div>
                 <p class="modal-link">Memfault: perfil → User API Key (com e-mail) ou Admin → Organization Auth Tokens (OAT, e-mail vazio). GPS/sensores: menu ☰ → User Account → Current Team Details → API key (hex). Docs: <a href="https://docs.memfault.com/docs/legacy-nrfcloud/tokens-and-keys.md" target="_blank" rel="noopener">tokens e keys</a>.</p>
             </div>
             <footer class="modal-footer">
+                <button class="btn btn-outline" id="copyPairingLink" type="button">Copiar link pro celular</button>
                 <button class="btn btn-ghost" id="cancelConfig">Cancelar</button>
                 <button class="btn btn-primary" id="saveConfig">Salvar e Conectar</button>
             </footer>
@@ -365,6 +375,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=21"></script>
 </body>
 </html>
