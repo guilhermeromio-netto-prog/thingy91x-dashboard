@@ -7,8 +7,10 @@
  * Auth: Memfault Basic/OAT + optional team Simple Token (X-Nrf-Team-Key) for msgs/GPS
  * Writes: shadow PATCH + c2d forwarded to api.nrfcloud.com (need Simple Token). Still 501: legacy FOTA
  */
-const NRF_CLOUD_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-    ? 'http://localhost:3001/api' : '/.netlify/functions/nrfcloud';
+// Express (localhost + cloudflared tunnel) serves /api; Netlify uses the function proxy
+const NRF_CLOUD_BASE = /netlify\.app$/i.test(location.hostname)
+    ? '/.netlify/functions/nrfcloud'
+    : '/api';
 
 const DEVICE_DEFAULT = '50423451-3737-4337-80fc-110bddf418ff';
 let config = {
