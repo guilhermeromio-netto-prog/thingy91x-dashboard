@@ -444,3 +444,30 @@ header h1 {
 .loc-source-badge.src-wifi { background: #00b894; border-color: transparent; }
 .loc-source-badge.src-cell { background: #0984e3; border-color: transparent; }
 .loc-source-badge.src-gnss { background: #6c5ce7; border-color: transparent; }
+
+.trail-hint {
+    font-size: .72rem;
+    font-weight: 500;
+    opacity: .85;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(255,255,255,.1);
+    border: 1px dashed rgba(255,255,255,.35);
+    white-space: nowrap;
+    align-self: center;
+}
+.leaflet-popup.trail-popup-wrap .leaflet-popup-content-wrapper {
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.trail-popup {
+    font-size: .82rem;
+    line-height: 1.45;
+    color: #2d3436;
+    min-width: 180px;
+}
+.trail-popup strong {
+    color: #0984e3;
+    font-weight: 600;
+    margin-right: 4px;
+}

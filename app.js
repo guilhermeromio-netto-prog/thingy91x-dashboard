@@ -33,7 +33,7 @@ let config = {
     projectSlug: localStorage.getItem('nrf_project_slug') || 'nrf-project',
     deviceId: localStorage.getItem('nrf_device_id') || DEVICE_DEFAULT
 };
-let map, marker, accuracyCircle = null, trailLine = null, trailEnabled = true;
+let map, marker, accuracyCircle = null, trailLine = null, trailMarkersLayer = null, trailEnabled = true;
 let fleetMarkers = [];
 let pollInterval = null;
 function resolvePollMs() {
@@ -663,6 +663,7 @@ function switchDevice(id) {
     config.deviceId = id; localStorage.setItem('nrf_device_id', id);
     if (elements.deviceSelect) elements.deviceSelect.value = id;
     lastConnected = null; lastTrail = []; lastTrailFitCount = 0; trailFailLogged = false;
+    clearTrailMarkers();
     log('info', `Trocado para ${id}`); fetchAndUpdate(); loadTrail();
 }
 
@@ -673,6 +674,7 @@ function initMap() {
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(map);
     marker = L.marker([0, 0]).addTo(map); marker.setOpacity(0);
     trailLine = L.polyline([], { color: '#0984e3', weight: 3, opacity: 0.7 }).addTo(map);
+    trailMarkersLayer = L.layerGroup().addTo(map);
     restoreGeofence(); log('info', 'Mapa pronto');
 }
 /** Move marker + accuracy only. Trail polyline is owned by applyTrailPoints. */
@@ -691,6 +693,10 @@ function updateMap(lat, lon, acc, opts = {}) {
             src: opts.src || 'live',
             unc: acc != null ? Number(acc) : undefined,
             serviceType: opts.serviceType || null,
+            battery: opts.battery, batteryVoltage: opts.batteryVoltage, charging: opts.charging,
+            connected: opts.connected, lastSeen: opts.lastSeen,
+            temp: opts.temp, hum: opts.hum, press: opts.press,
+            rsrp: opts.rsrp, operator: opts.operator, fw: opts.fw,
         });
     }
     if (!opts.skipZoom && map.getZoom() < 12) {
@@ -720,7 +726,7 @@ function numOrNull(v) {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
 }
-/** Normalize nRF Cloud location/history item (varying shapes) → {lat,lon,at,unc,serviceType}. */
+/** Normalize nRF Cloud / local trail item → rich snapshot-capable point. */
 function normalizeLocItem(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const loc = (raw.location && typeof raw.location === 'object') ? raw.location
@@ -731,13 +737,31 @@ function normalizeLocItem(raw) {
     if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
     const meta = raw.$meta || raw.meta || {};
     const at = raw.timestamp || raw.ts || raw.receivedAt || raw.insertedAt || raw.recordedAt
-        || meta.updatedAt || meta.insertedAt || loc.timestamp || loc.ts || null;
+        || meta.updatedAt || meta.insertedAt || loc.timestamp || loc.ts || raw.at || null;
     const unc = numOrNull(
         raw.uncertainty ?? raw.unc ?? raw.accuracy
         ?? meta.acc ?? meta.uncertainty ?? loc.uncertainty ?? loc.accuracy
     );
     const serviceType = raw.serviceType || raw.service || loc.serviceType || raw.src || null;
-    return { lat, lon, at: at ? String(at) : null, unc, serviceType };
+    const out = {
+        lat, lon,
+        at: at ? String(at) : null,
+        unc,
+        serviceType,
+        src: raw.src || raw._src || serviceType || null,
+        battery: numOrNull(raw.battery ?? raw.batteryPct),
+        batteryVoltage: numOrNull(raw.batteryVoltage ?? raw.batteryV),
+        charging: (typeof raw.charging === 'boolean') ? raw.charging : null,
+        connected: (typeof raw.connected === 'boolean') ? raw.connected : null,
+        lastSeen: raw.lastSeen || null,
+        temp: numOrNull(raw.temp),
+        hum: numOrNull(raw.hum),
+        press: numOrNull(raw.press),
+        rsrp: numOrNull(raw.rsrp),
+        operator: raw.operator || null,
+        fw: raw.fw || raw.firmware || null,
+    };
+    return out;
 }
 function samePointRough(a, b) {
     if (!a || !b) return false;
@@ -759,9 +783,30 @@ function minuteKey(at) {
     if (!at) return null;
     const d = new Date(at);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+    return d.toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM UTC
 }
-/** Prefer cloud when both exist for the same minute. */
+function voltToBatteryPct(v) {
+    if (v == null || !Number.isFinite(Number(v))) return null;
+    let volts = Number(v);
+    if (volts > 1000) volts = volts / 1000;
+    return Math.max(0, Math.min(100, Math.round((volts - 3.2) / 1.0 * 100)));
+}
+function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+function sourceLabelPt(src) {
+    const s = String(src || '').toLowerCase();
+    if (!s) return '—';
+    if (s.startsWith('wifi') || s === 'wifi') return 'Wi‑Fi';
+    if (s.startsWith('cell') || s.includes('scell') || s.includes('mcell') || s.includes('cloud')) return 'Célula';
+    if (s.includes('gnss') || s.includes('gps') || s === 'uart' || s === 'serial' || s === 'live') return 'GNSS';
+    if (s === 'local' || s === 'trilha' || s === 'trail') return 'Local';
+    if (s === 'cloud') return 'Célula';
+    return s.slice(0, 16);
+}
+/** Prefer cloud coords when both exist for the same minute; keep richer snapshot fields. */
 function mergeTrailPoints(cloudPts, localPts) {
     const byKey = new Map();
     for (const p of localPts || []) {
@@ -770,12 +815,72 @@ function mergeTrailPoints(cloudPts, localPts) {
     }
     for (const p of cloudPts || []) {
         const k = minuteKey(p.at) || `${Number(p.lat).toFixed(5)},${Number(p.lon).toFixed(5)}`;
-        byKey.set(k, { ...p, _src: 'cloud' });
+        const prev = byKey.get(k);
+        if (prev) {
+            byKey.set(k, {
+                ...prev,
+                ...p,
+                // keep local telemetry when cloud only has coords
+                battery: p.battery ?? prev.battery,
+                batteryVoltage: p.batteryVoltage ?? prev.batteryVoltage,
+                charging: (typeof p.charging === 'boolean') ? p.charging : prev.charging,
+                connected: (typeof p.connected === 'boolean') ? p.connected : prev.connected,
+                lastSeen: p.lastSeen || prev.lastSeen,
+                temp: p.temp ?? prev.temp,
+                hum: p.hum ?? prev.hum,
+                press: p.press ?? prev.press,
+                rsrp: p.rsrp ?? prev.rsrp,
+                operator: p.operator || prev.operator,
+                fw: p.fw || prev.fw,
+                src: p.src || prev.src,
+                _src: 'cloud',
+            });
+        } else {
+            byKey.set(k, { ...p, _src: 'cloud' });
+        }
     }
     return [...byKey.values()].sort((a, b) => {
         const ta = a.at ? new Date(a.at).getTime() : 0;
         const tb = b.at ? new Date(b.at).getTime() : 0;
         return ta - tb;
+    });
+}
+/** Enrich cloud-only points with nearest local snapshot within ±2 minutes. */
+function enrichWithLocalSnapshots(points, localRaw) {
+    const locals = (localRaw || []).map(normalizeLocItem).filter(Boolean)
+        .filter(p => p.at && (p.battery != null || p.connected != null || p.temp != null || p.rsrp != null || p.hum != null));
+    if (!locals.length) return points;
+    const withTs = locals.map(p => ({ p, t: new Date(p.at).getTime() })).filter(x => Number.isFinite(x.t))
+        .sort((a, b) => a.t - b.t);
+    const WIN = 2 * 60 * 1000;
+    return (points || []).map(pt => {
+        if (!pt || !pt.at) return pt;
+        // already has telemetry
+        if (pt.battery != null || pt.connected != null || pt.temp != null || pt.rsrp != null) return pt;
+        const t = new Date(pt.at).getTime();
+        if (!Number.isFinite(t)) return pt;
+        let best = null, bestD = Infinity;
+        for (const { p, t: lt } of withTs) {
+            const d = Math.abs(lt - t);
+            if (d <= WIN && d < bestD) { best = p; bestD = d; }
+            if (lt > t + WIN) break;
+        }
+        if (!best) return pt;
+        return {
+            ...pt,
+            battery: pt.battery ?? best.battery,
+            batteryVoltage: pt.batteryVoltage ?? best.batteryVoltage,
+            charging: (typeof pt.charging === 'boolean') ? pt.charging : best.charging,
+            connected: (typeof pt.connected === 'boolean') ? pt.connected : best.connected,
+            lastSeen: pt.lastSeen || best.lastSeen,
+            temp: pt.temp ?? best.temp,
+            hum: pt.hum ?? best.hum,
+            press: pt.press ?? best.press,
+            rsrp: pt.rsrp ?? best.rsrp,
+            operator: pt.operator || best.operator,
+            fw: pt.fw || best.fw,
+            _enriched: true,
+        };
     });
 }
 function trailDistanceKm(pts) {
@@ -791,32 +896,177 @@ function updateTrailPointsUI(n, km) {
     const kmTxt = (km >= 10) ? km.toFixed(0) : km.toFixed(1);
     setText(elements.trailPoints, `Trilha ${on} · ${n} pts · ${kmTxt} km`);
 }
+function snapshotFieldsFrom(pt) {
+    return {
+        battery: pt.battery != null ? numOrNull(pt.battery) : null,
+        batteryVoltage: pt.batteryVoltage != null ? numOrNull(pt.batteryVoltage) : null,
+        charging: (typeof pt.charging === 'boolean') ? pt.charging : null,
+        connected: (typeof pt.connected === 'boolean') ? pt.connected : null,
+        lastSeen: pt.lastSeen || null,
+        temp: pt.temp != null ? numOrNull(pt.temp) : null,
+        hum: pt.hum != null ? numOrNull(pt.hum) : null,
+        press: pt.press != null ? numOrNull(pt.press) : null,
+        rsrp: pt.rsrp != null ? numOrNull(pt.rsrp) : null,
+        operator: pt.operator || null,
+        fw: pt.fw || null,
+    };
+}
+/**
+ * Dedup by UTC minute: one point per minute, unless moved >15 m (keep both).
+ * Cap ~2000 in saveLocalTrailRaw.
+ */
 function accumulateLocalPoint(pt) {
     if (!pt || pt.lat == null || pt.lon == null || !config.deviceId) return;
     const store = loadLocalTrailRaw();
+    const snap = snapshotFieldsFrom(pt);
     const norm = {
         lat: Number(pt.lat), lon: Number(pt.lon),
         at: pt.at || new Date().toISOString(),
         src: pt.src || pt._src || 'live',
         unc: pt.unc, serviceType: pt.serviceType || null,
+        ...snap,
     };
-    const last = store[store.length - 1];
-    if (last && samePointRough(last, norm)) {
-        // refresh timestamp if newer
-        if (norm.at && (!last.at || new Date(norm.at) > new Date(last.at))) {
-            store[store.length - 1] = { ...last, at: norm.at, unc: norm.unc ?? last.unc };
-            saveLocalTrailRaw(store);
+    const mk = minuteKey(norm.at);
+    // Find last point in same UTC minute
+    let sameMinIdx = -1;
+    if (mk) {
+        for (let i = store.length - 1; i >= 0; i--) {
+            const prevMk = minuteKey(store[i].at);
+            if (prevMk === mk) { sameMinIdx = i; break; }
+            if (prevMk && prevMk < mk) break;
         }
-        return;
+    }
+    if (sameMinIdx >= 0) {
+        const last = store[sameMinIdx];
+        const moved = haversine(Number(last.lat), Number(last.lon), norm.lat, norm.lon);
+        if (moved <= 15) {
+            // same minute + close → refresh / merge richer fields
+            store[sameMinIdx] = {
+                ...last,
+                ...norm,
+                battery: snap.battery ?? last.battery,
+                batteryVoltage: snap.batteryVoltage ?? last.batteryVoltage,
+                charging: (typeof snap.charging === 'boolean') ? snap.charging : last.charging,
+                connected: (typeof snap.connected === 'boolean') ? snap.connected : last.connected,
+                lastSeen: snap.lastSeen || last.lastSeen,
+                temp: snap.temp ?? last.temp,
+                hum: snap.hum ?? last.hum,
+                press: snap.press ?? last.press,
+                rsrp: snap.rsrp ?? last.rsrp,
+                operator: snap.operator || last.operator,
+                fw: snap.fw || last.fw,
+            };
+            saveLocalTrailRaw(store);
+            return;
+        }
+        // moved >15m in same minute → keep both (fall through to push)
+    } else {
+        const last = store[store.length - 1];
+        if (last && samePointRough(last, norm) && (!mk || minuteKey(last.at) === mk)) {
+            store[store.length - 1] = {
+                ...last, at: norm.at || last.at, unc: norm.unc ?? last.unc,
+                battery: snap.battery ?? last.battery,
+                batteryVoltage: snap.batteryVoltage ?? last.batteryVoltage,
+                charging: (typeof snap.charging === 'boolean') ? snap.charging : last.charging,
+                connected: (typeof snap.connected === 'boolean') ? snap.connected : last.connected,
+                lastSeen: snap.lastSeen || last.lastSeen,
+                temp: snap.temp ?? last.temp,
+                hum: snap.hum ?? last.hum,
+                press: snap.press ?? last.press,
+                rsrp: snap.rsrp ?? last.rsrp,
+                operator: snap.operator || last.operator,
+                fw: snap.fw || last.fw,
+                src: norm.src || last.src,
+            };
+            saveLocalTrailRaw(store);
+            return;
+        }
     }
     store.push(norm);
     saveLocalTrailRaw(store);
+}
+function buildTrailPopupHtml(pt) {
+    const dash = '—';
+    let hora = dash;
+    if (pt.at) {
+        const d = new Date(pt.at);
+        if (!Number.isNaN(d.getTime())) {
+            hora = d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
+        }
+    }
+    const lat = Number(pt.lat).toFixed(6);
+    const lon = Number(pt.lon).toFixed(6);
+    let bat = dash;
+    const pct = pt.battery != null ? Number(pt.battery) : voltToBatteryPct(pt.batteryVoltage);
+    if (pct != null && Number.isFinite(pct)) {
+        bat = `${Math.round(pct)}%`;
+        if (pt.batteryVoltage != null) {
+            let v = Number(pt.batteryVoltage);
+            if (v > 1000) v /= 1000;
+            bat += ` (${v.toFixed(2)} V)`;
+        }
+        if (pt.charging === true) bat += ' · carregando';
+        else if (pt.charging === false) bat += ' · não carrega';
+    }
+    let status = dash;
+    if (pt.connected === true) status = 'Ligado/Conectado';
+    else if (pt.connected === false) status = 'Offline';
+    const ambParts = [];
+    if (pt.temp != null) ambParts.push(`${Number(pt.temp).toFixed(1)} °C`);
+    if (pt.hum != null) ambParts.push(`${Number(pt.hum).toFixed(1)}% UR`);
+    if (pt.press != null) {
+        const ph = typeof normalizePressHpa === 'function' ? normalizePressHpa(pt.press) : pt.press;
+        if (ph != null) ambParts.push(`${Number(ph).toFixed(1)} hPa`);
+    }
+    const ambiente = ambParts.length ? ambParts.join(' · ') : dash;
+    const redeParts = [];
+    if (pt.rsrp != null) redeParts.push(`${pt.rsrp} dBm`);
+    if (pt.operator) redeParts.push(String(pt.operator));
+    const rede = redeParts.length ? redeParts.join(' · ') : dash;
+    const fonte = sourceLabelPt(pt.serviceType || pt.src || pt._src);
+    const fw = pt.fw ? escHtml(pt.fw) : dash;
+    return `<div class="trail-popup">
+<strong>Horário</strong> ${escHtml(hora)}<br>
+<strong>Lat / Lon</strong> ${escHtml(lat)} / ${escHtml(lon)}<br>
+<strong>Bateria</strong> ${escHtml(bat)}<br>
+<strong>Status</strong> ${escHtml(status)}<br>
+<strong>Ambiente</strong> ${escHtml(ambiente)}<br>
+<strong>Rede</strong> ${escHtml(rede)}<br>
+<strong>Fonte</strong> ${escHtml(fonte)}
+${pt.fw ? `<br><strong>FW</strong> ${fw}` : ''}
+</div>`;
+}
+function clearTrailMarkers() {
+    if (trailMarkersLayer) trailMarkersLayer.clearLayers();
+}
+function renderTrailMarkers(points) {
+    if (!map) return;
+    if (!trailMarkersLayer) trailMarkersLayer = L.layerGroup().addTo(map);
+    clearTrailMarkers();
+    if (!trailEnabled || !points || !points.length) return;
+    const n = points.length;
+    points.forEach((pt, i) => {
+        if (!pt || pt.lat == null || pt.lon == null) return;
+        const isLatest = i === n - 1;
+        const cm = L.circleMarker([Number(pt.lat), Number(pt.lon)], {
+            radius: isLatest ? 8 : 4,
+            color: isLatest ? '#E20074' : '#0984e3',
+            weight: isLatest ? 2 : 1,
+            fillColor: isLatest ? '#E20074' : '#74b9ff',
+            fillOpacity: isLatest ? 0.95 : 0.75,
+            opacity: 0.9,
+        });
+        cm.bindPopup(buildTrailPopupHtml(pt), { maxWidth: 280, className: 'trail-popup-wrap' });
+        cm.on('click', () => { try { cm.openPopup(); } catch { /* ignore */ } });
+        trailMarkersLayer.addLayer(cm);
+    });
 }
 function applyTrailPoints(points) {
     const deduped = dedupeConsecutive((points || []).filter(p => p && p.lat != null && p.lon != null));
     lastTrail = deduped;
     const latlngs = deduped.map(p => [Number(p.lat), Number(p.lon)]);
     if (trailLine) trailLine.setLatLngs(trailEnabled ? latlngs : []);
+    renderTrailMarkers(trailEnabled ? deduped : []);
     const km = trailDistanceKm(deduped);
     updateTrailPointsUI(deduped.length, km);
     if (trailEnabled && map && latlngs.length >= 2 && latlngs.length !== lastTrailFitCount) {
@@ -889,14 +1139,34 @@ async function fetchAndUpdate() {
         const ser = serial || lastSerial;
         const healthy = serialIsHealthy(ser);
         const hasGps = fromMsg.gps?.lat != null && fromMsg.gps?.lon != null;
-        // Live fix → local trail accumulate (Pages without USB still builds a path)
+        // Live fix → rich snapshot for trail (1 pt/min; clickable device state)
         if (hasGps) {
+            const batV = fromMsg.batteryV ?? parsed.batteryV;
+            const batPct = voltToBatteryPct(batV);
+            let charging = null;
+            try {
+                const batObj = lastDeviceRaw?.state?.reported?.device?.batteryStatus
+                    || lastDeviceRaw?.state?.reported?.battery || null;
+                if (batObj && typeof batObj.charging === 'boolean') charging = batObj.charging;
+                else if (batObj && typeof batObj.chargerConnected === 'boolean') charging = batObj.chargerConnected;
+            } catch { /* ignore */ }
             accumulateLocalPoint({
                 lat: fromMsg.gps.lat, lon: fromMsg.gps.lon,
                 at: fromMsg.latestAt || new Date().toISOString(),
                 src: fromMsg.gps.source || telemetrySource.gps || 'live',
                 unc: fromMsg.gps.accuracy,
                 serviceType: fromMsg.gps.source || null,
+                battery: batPct,
+                batteryVoltage: batV != null ? (Number(batV) > 1000 ? Number(batV) / 1000 : Number(batV)) : null,
+                charging,
+                connected: typeof parsed.connected === 'boolean' ? parsed.connected : null,
+                lastSeen: parsed.lastSeen || fromMsg.latestAt || null,
+                temp: fromMsg.temp ?? null,
+                hum: fromMsg.hum ?? null,
+                press: fromMsg.press != null ? (normalizePressHpa(fromMsg.press) ?? fromMsg.press) : null,
+                rsrp: fromMsg.rsrp ?? parsed.rsrp ?? null,
+                operator: parsed.operator || null,
+                fw: parsed.firmware && parsed.firmware !== '—' ? parsed.firmware : null,
             });
         }
         // Posição headline: calm/actionable; avoid scary Simple Token nag when serial healthy
@@ -971,16 +1241,18 @@ async function loadTrail(opts = {}) {
         }
     }
     const cloudPts = (cloudItems || []).map(normalizeLocItem).filter(Boolean);
-    // Seed local store from cloud (deduped append)
+    // Seed local store from cloud (coords only — don't wipe rich local snapshots)
     for (const p of cloudPts) {
-        accumulateLocalPoint({ ...p, src: 'cloud' });
+        accumulateLocalPoint({ ...p, src: p.src || 'cloud' });
     }
     const cutoff = Date.now() - hours * 3600 * 1000;
-    const localPts = loadLocalTrailRaw()
+    const localRaw = loadLocalTrailRaw();
+    const localPts = localRaw
         .map(normalizeLocItem)
         .filter(Boolean)
         .filter(p => !p.at || new Date(p.at).getTime() >= cutoff);
-    const merged = dedupeConsecutive(mergeTrailPoints(cloudPts, localPts));
+    let merged = dedupeConsecutive(mergeTrailPoints(cloudPts, localPts));
+    merged = enrichWithLocalSnapshots(merged, localRaw);
     const applied = applyTrailPoints(merged);
     const sts = [...new Set(applied.map(i => i.serviceType).filter(Boolean))];
     if (sts.length) setText(elements.serviceType, sts.join(', '));
@@ -1018,7 +1290,7 @@ elements.toggleTrail?.addEventListener('click', () => {
     trailEnabled = !trailEnabled;
     updateTrailPointsUI(lastTrail.length, trailDistanceKm(lastTrail));
     log('info', `Trilha ${trailEnabled ? 'ON' : 'OFF'}`);
-    if (!trailEnabled) { trailLine?.setLatLngs([]); lastTrailFitCount = 0; }
+    if (!trailEnabled) { trailLine?.setLatLngs([]); clearTrailMarkers(); lastTrailFitCount = 0; }
     else { lastTrailFitCount = 0; loadTrail(); }
 });
 elements.trailRange?.addEventListener('change', loadTrail);
@@ -1106,10 +1378,10 @@ elements.exportShadow?.addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=17', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=18', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v17';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v17').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v18';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v18').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }
