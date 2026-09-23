@@ -2,7 +2,14 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <base href="/thingy91x-dashboard/">
+    <script>
+(function () {
+  var b = document.createElement('base');
+  b.href = /github\.io$/i.test(location.hostname) ? '/thingy91x-dashboard/' : '/';
+  var first = document.head.firstChild;
+  document.head.insertBefore(b, first);
+})();
+</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#E20074">
     <meta name="description" content="Dashboard Thingy:91X — rastreador IoT via nRF Cloud">
@@ -13,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=23">
+    <link rel="stylesheet" href="styles.css?v=24">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -412,6 +419,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
 </body>
 </html>

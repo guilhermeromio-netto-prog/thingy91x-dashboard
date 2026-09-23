@@ -386,6 +386,11 @@ async function mergeSerialIntoMessages(data, status, reqUrl, auth, org, project,
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(__dirname));
+// GitHub Pages path alias so /thingy91x-dashboard/* also serves local assets on localhost
+app.use('/thingy91x-dashboard', express.static(__dirname));
+app.get(['/thingy91x-dashboard', '/thingy91x-dashboard/'], (_req, res) => {
+  res.redirect(302, '/');
+});
 
 /** Legacy FOTA still 501 — shadow PATCH + c2d are forwarded to api.nrfcloud.com */
 const UNSUPPORTED_WRITES = [
