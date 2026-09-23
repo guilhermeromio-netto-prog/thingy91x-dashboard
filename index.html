@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=18">
+    <link rel="stylesheet" href="styles.css?v=19">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -42,14 +42,21 @@
             <section class="hero-card">
                 <div class="hero-main">
                     <div class="device-identity">
-                        <h1 id="deviceName">Thingy:91X</h1>
+                        <div class="alias-row">
+                            <h1 id="deviceName" class="alias-display" title="Clique para editar o nome operacional" contenteditable="true" spellcheck="false">Asset Tracker</h1>
+                            <button type="button" class="btn btn-ghost btn-sm alias-edit-btn" id="aliasEditBtn" title="Editar nome operacional" aria-label="Editar nome">✎</button>
+                        </div>
+                        <p class="situacao-line" id="situacaoLine" title="Resumo rápido">—</p>
                         <div class="fleet-row">
                             <select id="deviceSelect" aria-label="Selecionar dispositivo"></select>
                             <button class="btn btn-ghost btn-sm" id="refreshFleet">↻ Frota</button>
                             <span class="chip" id="fleetCount">—</span>
                         </div>
                         <div class="device-meta">
-                            <span class="chip" id="deviceId">—</span>
+                            <span class="uuid-row">
+                                <span class="chip chip-uuid" id="deviceId" title="UUID / Device ID">—</span>
+                                <button type="button" class="btn btn-ghost btn-sm btn-copy" id="copyDeviceId" title="Copiar UUID" aria-label="Copiar UUID">Copiar</button>
+                            </span>
                             <span class="chip" id="firmwareVersion">—</span>
                             <span class="chip" id="lastSeen">—</span>
                             <span class="chip chip-source" id="dataSourceBadge" title="Origem dos sensores">—</span>
@@ -66,6 +73,7 @@
                                 <span id="gpsAcc">—</span>
                                 <span>·</span>
                                 <span id="gpsSats">—</span>
+                                <span class="data-age" id="gpsAge" title="Idade do dado de posição">—</span>
                             </div>
                             <div class="gps-details">
                                 <span>Lat <strong id="gpsLat">—</strong></span>
@@ -97,6 +105,7 @@
                     <header class="card-header">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
                         <h2>Ambiente</h2>
+                        <span class="data-age" id="envAge" title="Idade do dado de ambiente">—</span>
                     </header>
                     <div class="card-body">
                         <div class="metric metric-large">
@@ -126,6 +135,7 @@
                         <h2>Movimento</h2>
                     </header>
                     <div class="card-body">
+                        <p class="card-empty-hint" id="motionEmptyHint" hidden></p>
                         <div class="axis-row">
                             <div class="axis"><span class="axis-label">X</span><span class="axis-value" id="accelX">—</span></div>
                             <div class="axis"><span class="axis-label">Y</span><span class="axis-value" id="accelY">—</span></div>
@@ -135,6 +145,10 @@
                             <span class="value" id="steps">—</span>
                             <span class="metric-label">Passos</span>
                         </div>
+                        <div class="metric" id="motionSpeedWrap" hidden>
+                            <span class="value" id="motionSpeed">—</span>
+                            <span class="metric-label">Deslocamento (GNSS)</span>
+                        </div>
                     </div>
                 </article>
 
@@ -143,6 +157,7 @@
                     <header class="card-header">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M23 10h-2M1 10H23"/></svg>
                         <h2>Bateria</h2>
+                        <span class="data-age" id="batteryAge" title="Idade do dado de bateria">—</span>
                     </header>
                     <div class="card-body">
                         <div class="battery-wrap">
@@ -163,8 +178,10 @@
                     <header class="card-header">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M12 19v-4M12 3v2M19 12h-4M3 12h2"/></svg>
                         <h2>Rede</h2>
+                        <span class="data-age" id="netAge" title="Idade do dado de rede">—</span>
                     </header>
                     <div class="card-body">
+                        <p class="card-empty-hint" id="netEmptyHint" hidden></p>
                         <div class="net-grid" id="netGrid">
                             <div class="net-item"><span class="net-label">Operadora</span><span class="net-value" id="operator">—</span></div>
                             <div class="net-item"><span class="net-label">MCC/MNC</span><span class="net-value" id="netMccMnc">—</span></div>
@@ -224,7 +241,7 @@
                             <button class="btn btn-primary btn-sm" id="geoSet">Usar posição atual</button>
                             <button class="btn btn-ghost btn-sm" id="geoClear">Limpar</button>
                         </div>
-                        <div class="conn-item"><span class="conn-label">Estado</span><span class="conn-value" id="geoState">—</span></div>
+                        <div class="conn-item"><span class="conn-label">Estado</span><span class="conn-value" id="geoState">Sem cerca definida.</span></div>
                     </div>
                 </article>
 
@@ -347,6 +364,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=19"></script>
 </body>
 </html>

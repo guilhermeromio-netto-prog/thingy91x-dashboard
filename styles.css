@@ -471,3 +471,63 @@ header h1 {
     font-weight: 600;
     margin-right: 4px;
 }
+
+/* ---------- P0: data age, empty hints, alias, UUID ---------- */
+.data-age {
+  margin-left: auto;
+  font-size: .7rem;
+  font-weight: 500;
+  color: #636e72;
+  opacity: .85;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.hero-card .data-age,
+.gps-meta .data-age { color: rgba(255,255,255,.75); margin-left: 0; }
+.data-age.atrasado { color: #d63031; font-weight: 700; opacity: 1; }
+.hero-card .data-age.atrasado { color: #ffeaa7; }
+
+.card-empty-hint {
+  font-size: .8rem;
+  line-height: 1.35;
+  color: #636e72;
+  background: #f1f2f6;
+  border-left: 3px solid #b2bec3;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin: 0 0 10px;
+}
+.card-empty-hint[hidden] { display: none !important; }
+
+.alias-row { display: flex; align-items: center; gap: 8px; }
+.alias-display {
+  margin: 0;
+  outline: none;
+  border-radius: 6px;
+  padding: 2px 4px;
+  min-width: 8ch;
+}
+.alias-display:focus {
+  background: rgba(255,255,255,.12);
+  box-shadow: 0 0 0 2px rgba(255,255,255,.35);
+}
+.alias-edit-btn { color: #fff !important; border-color: rgba(255,255,255,.35) !important; }
+.situacao-line {
+  margin: 4px 0 8px;
+  font-size: .82rem;
+  opacity: .88;
+  letter-spacing: .01em;
+}
+.uuid-row { display: inline-flex; align-items: center; gap: 6px; }
+.chip-uuid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .72rem;
+  letter-spacing: .02em;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-copy { color: #fff !important; border-color: rgba(255,255,255,.4) !important; padding: 2px 8px !important; font-size: .72rem !important; }
+.btn-copy.copied { background: rgba(0,184,148,.35) !important; }
+.fleet-alias { font-size: .72rem; color: #636e72; }

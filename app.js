@@ -44,7 +44,7 @@ function resolvePollMs() {
     return 60000;
 }
 const POLL_MS = resolvePollMs();
-let lastConnected = null, lastSeenTs = null;
+let lastConnected = null, lastSeenTs = null, lastBatteryPct = null;
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
 let trailFailLogged = false, lastTrailFitCount = 0;
 const LOCAL_TRAIL_CAP = 2000;
@@ -76,6 +76,10 @@ const elements = {
     fotaList: $('fotaList'), fotaType: $('fotaType'), createFota: $('createFota'), refreshFota: $('refreshFota'), fotaJobs: $('fotaJobs'),
     msgTable: $('msgTable'), exportCsv: $('exportCsv'), exportGeo: $('exportGeo'), exportShadow: $('exportShadow'),
     dataSourceBadge: $('dataSourceBadge'),
+    copyDeviceId: $('copyDeviceId'), aliasEditBtn: $('aliasEditBtn'), situacaoLine: $('situacaoLine'),
+    envAge: $('envAge'), batteryAge: $('batteryAge'), gpsAge: $('gpsAge'), netAge: $('netAge'),
+    netEmptyHint: $('netEmptyHint'), motionEmptyHint: $('motionEmptyHint'),
+    motionSpeedWrap: $('motionSpeedWrap'), motionSpeed: $('motionSpeed'),
 };
 function setText(el, v) { if (el) el.textContent = v; }
 
@@ -145,6 +149,105 @@ function timeAgo(ts) {
     if (s < 3600) return `há ${Math.floor(s / 60)}min`;
     if (s < 86400) return `há ${Math.floor(s / 3600)}h`;
     return `há ${Math.floor(s / 86400)}d`;
+}
+/** Age label for vitals; marks .atrasado when >5 min. */
+function setDataAge(el, ts, { missing = 'sem timestamp' } = {}) {
+    if (!el) return;
+    if (!ts) {
+        el.textContent = missing;
+        el.classList.add('atrasado');
+        el.title = 'Sem timestamp do dado';
+        return;
+    }
+    const ms = Date.now() - new Date(ts).getTime();
+    const s = Math.floor(ms / 1000);
+    el.textContent = timeAgo(ts);
+    el.classList.toggle('atrasado', Number.isFinite(s) && s > 300);
+    el.title = new Date(ts).toLocaleString('pt-BR');
+}
+function aliasStorageKey(deviceId) {
+    return `thingy_device_alias_${deviceId || config.deviceId || 'default'}`;
+}
+function getDeviceAlias(deviceId, fallback) {
+    const id = deviceId || config.deviceId;
+    try {
+        const saved = localStorage.getItem(aliasStorageKey(id));
+        if (saved && saved.trim()) return saved.trim();
+    } catch { /* ignore */ }
+    return fallback || 'Asset Tracker';
+}
+function setDeviceAlias(deviceId, alias) {
+    const id = deviceId || config.deviceId;
+    const v = String(alias || '').trim() || 'Asset Tracker';
+    try { localStorage.setItem(aliasStorageKey(id), v); } catch { /* ignore */ }
+    return v;
+}
+function applyAliasToHero(deviceId, cloudName) {
+    const alias = getDeviceAlias(deviceId, cloudName || 'Asset Tracker');
+    if (elements.deviceName) {
+        // Avoid clobbering while user is editing
+        if (document.activeElement !== elements.deviceName)
+            elements.deviceName.textContent = alias;
+    }
+    return alias;
+}
+function looksLikeVoltage(n) {
+    if (n == null || !Number.isFinite(Number(n))) return false;
+    const v = Number(n);
+    if (v > 1000 && v < 6000) return true; // mV
+    if (v >= 2.5 && v <= 5.5) return true; // V typical Li-ion
+    return false;
+}
+function looksLikePercent(n) {
+    if (n == null || !Number.isFinite(Number(n))) return false;
+    const v = Number(n);
+    return v >= 0 && v <= 100;
+}
+function normalizeBatteryFields(rawV, rawPct) {
+    let volts = null, pct = null;
+    if (rawPct != null && Number.isFinite(Number(rawPct))) {
+        const p = Number(rawPct);
+        if (p >= 0 && p <= 100) pct = Math.round(p);
+    }
+    if (rawV != null && Number.isFinite(Number(rawV))) {
+        const v = Number(rawV);
+        if (looksLikeVoltage(v)) {
+            volts = v > 1000 ? v / 1000 : v;
+        } else if (pct == null && looksLikePercent(v) && !(v >= 2.5 && v <= 5.5)) {
+            pct = Math.round(v);
+        }
+    }
+    if (volts != null && pct == null) pct = voltToBatteryPct(volts);
+    return { volts, pct };
+}
+function updateSituacaoLine({ alias, connected, batteryPct, trailPts } = {}) {
+    if (!elements.situacaoLine) return;
+    if (batteryPct != null) lastBatteryPct = batteryPct;
+    const pct = batteryPct != null ? batteryPct : lastBatteryPct;
+    const parts = [];
+    parts.push(alias || getDeviceAlias(config.deviceId, 'Asset Tracker'));
+    const conn = connected !== undefined ? connected : lastConnected;
+    if (conn === true) parts.push('ONLINE');
+    else if (conn === false) parts.push('OFFLINE');
+    else parts.push('…');
+    if (pct != null) parts.push(`bateria ${pct}%`);
+    const n = trailPts != null ? trailPts : (lastTrail?.length || 0);
+    parts.push(`trilha ${n} pts`);
+    elements.situacaoLine.textContent = parts.join(' · ');
+}
+function refreshGeofenceUi(lat, lon) {
+    if (!geo) {
+        setText(elements.geoState, 'Sem cerca definida.');
+        if (elements.geoState) elements.geoState.style.color = '';
+        return;
+    }
+    if (map) restoreGeofence();
+    if (lat != null && lon != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lon))) {
+        checkGeofence(Number(lat), Number(lon));
+    } else {
+        setText(elements.geoState, 'Cerca ativa — aguardando fix.');
+        if (elements.geoState) elements.geoState.style.color = '#fdcb6e';
+    }
 }
 function setStatus(connected, label) {
     const el = elements.connectionStatus; if (!el) return;
@@ -460,9 +563,26 @@ function extractFromMessages(items) {
         press: num(typeof p === 'number' ? p : pick(p ?? env ?? {}, 'value', 'pressure', 'press', 'v')),
         rsrp: r != null ? (typeof r === 'number' ? r : pick(r, 'value', 'rsrp', 'v')) : num(pick(dev ?? {}, 'rsrp')),
         rsrq: pick(dev ?? {}, 'rsrq') ?? pick(out.RSRQ?.data ?? {}, 'value', 'v'),
-        batteryV: num(pick(dev ?? bat ?? {}, 'batteryVoltage', 'batV', 'bat', 'v', 'value', 'voltage')),
+        batteryV: num(pick(dev ?? bat ?? {}, 'batteryVoltage', 'batV', 'voltage', 'v')),
+        batteryPct: (() => {
+            // Explicit SoC keys first
+            let n = num(pick(bat ?? {}, 'percent', 'percentage', 'SoC', 'soc', 'level'));
+            if (n == null && bat != null && typeof bat === 'number') n = bat;
+            if (n == null) {
+                const v = num(pick(bat ?? {}, 'value', 'bat'));
+                // Bare 0–100 that is NOT in typical voltage band → SoC
+                if (v != null && v >= 0 && v <= 100 && !(v >= 2.5 && v <= 5.5)) n = v;
+            }
+            if (n == null) return undefined;
+            if (n >= 0 && n <= 100) return n;
+            return undefined;
+        })(),
+        batteryAt: out.BATTERY?.receivedAt || out.BAT?.receivedAt || out.DEVICE?.receivedAt || null,
+        envAt: out.TEMP?.receivedAt || out.ENV?.receivedAt || out.ENVIRONMENT?.receivedAt
+            || out.HUMID?.receivedAt || out.AIR_PRESS?.receivedAt || null,
         accel: out.ACCEL?.data ?? out.MOTION?.data,
         steps: num(pick(out.STEPS?.data ?? out.ACCEL?.data ?? {}, 'steps', 'stepCount', 'value')),
+        accelAt: out.ACCEL?.receivedAt || out.MOTION?.receivedAt || out.STEPS?.receivedAt || null,
     };
 }
 function parseDevice(d) {
@@ -472,6 +592,10 @@ function parseDevice(d) {
     const lastSeen = d.$meta?.updatedAt || d.last_seen || d._memfault?.last_seen || d._nrf?.$meta?.updatedAt;
     const firmware = fw.app?.version || di.appVersion || di.modemFirmware || d.last_seen_release?.version || d._memfault?.last_seen_release?.version || '—';
     const batteryV = num(bat.voltage || bat.batteryVoltage || bat.v || di.batteryVoltage);
+    const batteryPctRaw = num(bat.percent ?? bat.percentage ?? bat.SoC ?? bat.soc ?? bat.level
+        ?? bat.battery ?? (typeof bat === 'number' ? bat : undefined));
+    const batteryPct = (batteryPctRaw != null && batteryPctRaw >= 0 && batteryPctRaw <= 100
+        && !(batteryPctRaw >= 2.5 && batteryPctRaw <= 5.5)) ? Math.round(batteryPctRaw) : undefined;
     const mccMnc = ni.mccmnc || ni.mccMnc || ni.MCCMNC || null;
     let operator = ni.networkOperator || ni.operator || null;
     if ((!operator || String(operator) === String(mccMnc) || /^\d{5,6}$/.test(String(operator || ''))) && mccMnc) {
@@ -522,7 +646,9 @@ function parseDevice(d) {
         wifiApCount: num(ni.wifiApCount ?? ni.wifiAps),
         wifiStatus: ni.wifiStatus || null,
         batteryV,
+        batteryPct,
         hardware: d.hardware_version || d._memfault?.hardware_version,
+        nickname: d.nickname || d.name || null,
         netSourceHint: 'cloud',
     };
 }
@@ -554,35 +680,100 @@ function setGpsSourceBadge(src) {
 
 /* ---------- UI ---------- */
 function updateUI(parsed, fromMsg) {
-    setText(elements.deviceId, parsed.id || config.deviceId || '-');
-    setText(elements.deviceName, parsed.name || 'Thingy:91X');
+    const id = parsed.id || config.deviceId || '';
+    setText(elements.deviceId, id || '-');
+    const cloudName = parsed.nickname || parsed.name || null;
+    const alias = applyAliasToHero(id, cloudName && cloudName !== id ? cloudName : 'Asset Tracker');
     setText(elements.firmwareVersion, parsed.firmware || '-');
     const ls = parsed.lastSeen || fromMsg.latestAt;
     setText(elements.lastSeen, ls ? new Date(ls).toLocaleString('pt-BR') : '-'); lastSeenTs = ls || lastSeenTs;
+
     const gps = { ...fromMsg.gps };
+    let gpsTs = fromMsg.gpsAt || fromMsg.latestAt || lastSerial?.updatedAt || ls || null;
     if (gps.lat != null && gps.lon != null) {
         setText(elements.gpsCoords, `${gps.lat.toFixed(6)}, ${gps.lon.toFixed(6)}`);
         setGpsSourceBadge(gps.source || lastSerial?.locationSource || telemetrySource.gps);
         setText(elements.gpsLat, gps.lat.toFixed(6)); setText(elements.gpsLon, gps.lon.toFixed(6));
         setText(elements.gpsAcc, gps.accuracy != null ? `${Math.round(gps.accuracy)} m` : '—');
         setText(elements.gpsAlt, gps.altitude != null ? `${Math.round(gps.altitude)} m` : '—');
-        setText(elements.gpsSpeed, gps.speed != null ? `${Number(gps.speed).toFixed(1)} m/s` : '—');
-        updateMap(gps.lat, gps.lon, gps.accuracy); checkGeofence(gps.lat, gps.lon);
+        const spd = gps.speed != null ? Number(gps.speed) : null;
+        setText(elements.gpsSpeed, spd != null ? `${spd.toFixed(1)} m/s` : '—');
+        updateMap(gps.lat, gps.lon, gps.accuracy);
+        refreshGeofenceUi(gps.lat, gps.lon);
+    } else {
+        refreshGeofenceUi(null, null);
     }
+    setDataAge(elements.gpsAge, gps.lat != null ? gpsTs : null, { missing: gps.lat != null ? 'sem timestamp' : 'sem fix' });
+
+    // Ambiente
     if (fromMsg.temp != null) setText(elements.tempValue, fromMsg.temp.toFixed(1));
     if (fromMsg.hum != null) setText(elements.humValue, fromMsg.hum.toFixed(1));
     if (fromMsg.press != null) {
         const ph = normalizePressHpa(fromMsg.press);
         setText(elements.pressValue, ph != null ? ph.toFixed(1) : fromMsg.press.toFixed(1));
     }
-    const batteryV = fromMsg.batteryV ?? parsed.batteryV;
-    if (batteryV != null) {
-        const v = batteryV > 1000 ? batteryV / 1000 : batteryV;
-        setText(elements.batteryVoltage, `${v.toFixed(2)} V`);
-        const pct = Math.max(0, Math.min(100, Math.round((v - 3.2) / 1.0 * 100)));
-        if (elements.batteryFill) { elements.batteryFill.style.width = `${pct}%`; elements.batteryFill.className = 'battery-fill' + (pct < 20 ? ' critical' : pct < 40 ? ' low' : ''); }
-        setText(elements.batteryValue, `${pct}%`);
+    const envTs = fromMsg.envAt || (fromMsg.temp != null || fromMsg.hum != null || fromMsg.press != null
+        ? (fromMsg.latestAt || lastSerial?.updatedAt || ls) : null);
+    const hasEnv = fromMsg.temp != null || fromMsg.hum != null || fromMsg.press != null;
+    setDataAge(elements.envAge, hasEnv ? envTs : null, { missing: hasEnv ? 'sem timestamp' : 'sem dados' });
+
+    // Bateria — SoC % vs volts (never label percent as V)
+    const rawBatV = fromMsg.batteryV ?? parsed.batteryV;
+    const rawBatPct = fromMsg.batteryPct ?? parsed.batteryPct;
+    const { volts: batVolts, pct: batPct } = normalizeBatteryFields(rawBatV, rawBatPct);
+    if (batPct != null) {
+        setText(elements.batteryValue, `${batPct}%`);
+        if (elements.batteryFill) {
+            elements.batteryFill.style.width = `${batPct}%`;
+            elements.batteryFill.className = 'battery-fill' + (batPct < 20 ? ' critical' : batPct < 40 ? ' low' : '');
+        }
+    } else {
+        setText(elements.batteryValue, '—');
+        if (elements.batteryFill) { elements.batteryFill.style.width = '0%'; elements.batteryFill.className = 'battery-fill'; }
     }
+    if (batVolts != null) setText(elements.batteryVoltage, `${batVolts.toFixed(2)} V`);
+    else setText(elements.batteryVoltage, batPct != null ? 'tensão n/d' : '—');
+    const batTs = fromMsg.batteryAt || ((batPct != null || batVolts != null)
+        ? (fromMsg.latestAt || lastSerial?.updatedAt || ls) : null);
+    setDataAge(elements.batteryAge, (batPct != null || batVolts != null) ? batTs : null,
+        { missing: (batPct != null || batVolts != null) ? 'sem timestamp' : 'sem dados' });
+
+    // Movimento — honest empty + GNSS speed proxy
+    let hasAccel = false;
+    if (fromMsg.accel && typeof fromMsg.accel === 'object') {
+        const ax = num(fromMsg.accel.x ?? fromMsg.accel.ax); const ay = num(fromMsg.accel.y ?? fromMsg.accel.ay); const az = num(fromMsg.accel.z ?? fromMsg.accel.az);
+        if (ax != null) { setText(elements.accelX, ax.toFixed(2)); hasAccel = true; }
+        if (ay != null) { setText(elements.accelY, ay.toFixed(2)); hasAccel = true; }
+        if (az != null) { setText(elements.accelZ, az.toFixed(2)); hasAccel = true; }
+    }
+    if (fromMsg.steps != null) setText(elements.steps, String(fromMsg.steps));
+    const hasSteps = fromMsg.steps != null;
+    const gpsSpeedMs = gps.speed != null ? Number(gps.speed) : null;
+    const gpsSpeedKmh = gpsSpeedMs != null && Number.isFinite(gpsSpeedMs) ? gpsSpeedMs * 3.6 : null;
+    if (elements.motionEmptyHint) {
+        if (!hasAccel && !hasSteps) {
+            elements.motionEmptyHint.hidden = false;
+            let hint = 'Acelerômetro/passos não publicados neste firmware/mensagens (esperado no ATT sem app motion).';
+            if (gpsSpeedKmh != null) hint += ` Deslocamento via GNSS: ${gpsSpeedKmh.toFixed(1)} km/h.`;
+            elements.motionEmptyHint.textContent = hint;
+        } else {
+            elements.motionEmptyHint.hidden = true;
+            elements.motionEmptyHint.textContent = '';
+        }
+    }
+    if (elements.motionSpeedWrap && elements.motionSpeed) {
+        if (gpsSpeedKmh != null && (!hasAccel && !hasSteps)) {
+            elements.motionSpeedWrap.hidden = false;
+            setText(elements.motionSpeed, `${gpsSpeedKmh.toFixed(1)} km/h`);
+        } else if (gpsSpeedKmh != null) {
+            elements.motionSpeedWrap.hidden = false;
+            setText(elements.motionSpeed, `${gpsSpeedKmh.toFixed(1)} km/h`);
+        } else {
+            elements.motionSpeedWrap.hidden = true;
+        }
+    }
+
+    // Rede
     const rsrp = fromMsg.rsrp ?? parsed.rsrp;
     const rsrq = fromMsg.rsrq ?? parsed.rsrq;
     if (rsrp != null) setText(elements.rsrp, `${rsrp} dBm`);
@@ -590,14 +781,7 @@ function updateUI(parsed, fromMsg) {
     if (rsrq != null) setText(elements.rsrq, `${Number(rsrq)} dB`);
     else setText(elements.rsrq, '—');
     if (fromMsg.gps?.satellites != null) setText(elements.gpsSats, String(fromMsg.gps.satellites));
-    if (fromMsg.steps != null) setText(elements.steps, String(fromMsg.steps));
-    if (fromMsg.accel && typeof fromMsg.accel === 'object') {
-        const ax = num(fromMsg.accel.x ?? fromMsg.accel.ax); const ay = num(fromMsg.accel.y ?? fromMsg.accel.ay); const az = num(fromMsg.accel.z ?? fromMsg.accel.az);
-        if (ax != null) setText(elements.accelX, ax.toFixed(2));
-        if (ay != null) setText(elements.accelY, ay.toFixed(2));
-        if (az != null) setText(elements.accelZ, az.toFixed(2));
-    }
-    // Rede card — serial overlay + cloud networkInfo
+
     const mccMnc = parsed.mccMnc || null;
     setText(elements.operator, formatOperator(parsed.operator, mccMnc));
     setText(elements.netMccMnc, mccMnc ? String(mccMnc) : '—');
@@ -615,7 +799,43 @@ function updateUI(parsed, fromMsg) {
     setText(elements.netWifi, wifiTxt || '—');
     const src = telemetrySource.net || (lastSerial?.ok ? 'serial' : null) || parsed.netSourceHint || null;
     setText(elements.netSource, src || '—');
+
+    const hasCellFields = !!(mccMnc || parsed.operator || parsed.band != null || parsed.cellId != null
+        || parsed.eci != null || parsed.tac != null || parsed.ipAddress || rsrp != null || parsed.networkMode);
+    const locSrc = String(gps.source || lastSerial?.locationSource || telemetrySource.gps || '').toLowerCase();
+    const locWifi = /wifi|wi-?fi/.test(locSrc);
+    const online = parsed.connected === true;
+    const offline = parsed.connected === false;
+    if (elements.netEmptyHint) {
+        if (hasCellFields) {
+            elements.netEmptyHint.hidden = true;
+            elements.netEmptyHint.textContent = '';
+        } else {
+            elements.netEmptyHint.hidden = false;
+            if (locWifi || /wifi/i.test(String(elements.serviceType?.textContent || ''))) {
+                elements.netEmptyHint.textContent = 'Rádio celular não telemetrado neste payload — posição via Wi‑Fi/GNSS na nuvem.';
+            } else if (offline) {
+                elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline ou sem shadow de networkInfo.';
+            } else {
+                elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline ou sem shadow de networkInfo.';
+            }
+        }
+    }
+    const netTs = hasCellFields
+        ? (lastSerial?.updatedAt && telemetrySource.net === 'serial' ? lastSerial.updatedAt : (fromMsg.latestAt || ls))
+        : null;
+    setDataAge(elements.netAge, hasCellFields ? netTs : null, {
+        missing: hasCellFields ? 'sem timestamp' : (offline ? 'offline' : 'sem networkInfo'),
+    });
+
+    updateSituacaoLine({
+        alias,
+        connected: parsed.connected,
+        batteryPct: batPct,
+        trailPts: lastTrail?.length || 0,
+    });
 }
+
 function renderMsgTable(items) {
     if (!elements.msgTable) return;
     if (!items.length) { elements.msgTable.textContent = '—'; return; }
@@ -638,12 +858,16 @@ function renderDeviceSelect() {
 }
 function renderFleetGrid(fleetData) {
     if (!elements.fleetGrid) return;
-    elements.fleetGrid.innerHTML = fleetData.map(f =>
-        `<button class="fleet-card${f.id === config.deviceId ? ' active' : ''}" data-id="${f.id}">
+    elements.fleetGrid.innerHTML = fleetData.map(f => {
+        const alias = getDeviceAlias(f.id, f.nickname || f.name || 'Asset Tracker');
+        const showAlias = alias && alias !== f.id && alias !== (f.name || '');
+        return `<button class="fleet-card${f.id === config.deviceId ? ' active' : ''}" data-id="${f.id}">
       <span class="fleet-dot" style="background:${f.connected ? '#00b894' : '#d63031'}"></span>
-      <span class="fleet-name">${f.name || f.id}</span>
+      <span class="fleet-name">${alias || f.name || f.id}</span>
+      ${showAlias && f.name && f.name !== alias ? `<span class="fleet-alias">${escHtml(f.name)}</span>` : ''}
       <span class="fleet-meta">${f.connected ? 'ONLINE' : 'OFFLINE'} · ${timeAgo(f.lastSeen)}</span>
-    </button>`).join('') || '—';
+    </button>`;
+    }).join('') || '—';
     elements.fleetGrid.querySelectorAll('.fleet-card').forEach(b => b.addEventListener('click', () => switchDevice(b.dataset.id)));
 }
 async function loadFleet(light = false) {
@@ -661,6 +885,7 @@ async function loadFleet(light = false) {
 }
 function switchDevice(id) {
     config.deviceId = id; localStorage.setItem('nrf_device_id', id);
+    applyAliasToHero(id);
     if (elements.deviceSelect) elements.deviceSelect.value = id;
     lastConnected = null; lastTrail = []; lastTrailFitCount = 0; trailFailLogged = false;
     clearTrailMarkers();
@@ -1141,8 +1366,9 @@ async function fetchAndUpdate() {
         const hasGps = fromMsg.gps?.lat != null && fromMsg.gps?.lon != null;
         // Live fix → rich snapshot for trail (1 pt/min; clickable device state)
         if (hasGps) {
-            const batV = fromMsg.batteryV ?? parsed.batteryV;
-            const batPct = voltToBatteryPct(batV);
+            const batNorm = normalizeBatteryFields(fromMsg.batteryV ?? parsed.batteryV, fromMsg.batteryPct ?? parsed.batteryPct);
+            const batV = batNorm.volts;
+            const batPct = batNorm.pct;
             let charging = null;
             try {
                 const batObj = lastDeviceRaw?.state?.reported?.device?.batteryStatus
@@ -1263,6 +1489,18 @@ async function loadTrail(opts = {}) {
         const noFix = !gpsEl || gpsEl === '—' || /Sem fix/i.test(gpsEl);
         if (noFix) applyPositionFromPoint(last, last.serviceType || last._src || 'trilha');
     }
+    // Keep geofence + situação in sync with trail-derived position
+    try {
+        const lat = last?.lat ?? marker?.getLatLng()?.lat;
+        const lon = last?.lon ?? marker?.getLatLng()?.lng;
+        refreshGeofenceUi(lat, lon);
+    } catch { refreshGeofenceUi(null, null); }
+    updateSituacaoLine({
+        alias: getDeviceAlias(config.deviceId),
+        connected: lastConnected,
+        batteryPct: null,
+        trailPts: applied.length,
+    });
     if (!quiet) {
         if (applied.length) log('ok', `Trilha: ${applied.length} pts · ${trailDistanceKm(applied).toFixed(1)} km [${sts.join(',') || '?'}]`);
         else if (cloudOk) log('warn', 'Trilha vazia no período — aguardando fixes (local + nuvem)');
@@ -1331,16 +1569,20 @@ elements.geoSet?.addEventListener('click', () => {
     try {
         const p = marker.getLatLng(); if (!p || p.lat === 0) return log('warn', 'Sem posição atual');
         geo = { lat: p.lat, lon: p.lng, radius: Number(elements.geoRadius?.value || 500) };
-        localStorage.setItem('thingy_geo', JSON.stringify(geo)); restoreGeofence(); log('ok', 'Geofence definido', `${geo.lat},${geo.lon} r=${geo.radius}m`);
+        localStorage.setItem('thingy_geo', JSON.stringify(geo));
+        restoreGeofence();
+        refreshGeofenceUi(p.lat, p.lng);
+        log('ok', 'Geofence definido', `${geo.lat},${geo.lon} r=${geo.radius}m`);
     } catch { log('warn', 'Sem posição para geofence'); }
 });
 elements.geoClear?.addEventListener('click', () => {
     geo = null; localStorage.removeItem('thingy_geo');
     if (geoCircle && map) map.removeLayer(geoCircle); geoCircle = null;
-    setText(elements.geoState, '—'); log('info', 'Geofence limpo');
+    setText(elements.geoState, 'Sem cerca definida.'); if (elements.geoState) elements.geoState.style.color = ''; log('info', 'Geofence limpo');
 });
 if (elements.geoRadius && geo) elements.geoRadius.value = geo.radius;
-if (geo && elements.geoState) setText(elements.geoState, `Centro ${geo.lat},${geo.lon} · ${geo.radius}m`);
+if (geo && elements.geoState) setText(elements.geoState, 'Cerca ativa — aguardando fix.');
+else if (elements.geoState) setText(elements.geoState, 'Sem cerca definida.');
 
 elements.refreshFota?.addEventListener('click', async () => {
     try {
@@ -1375,13 +1617,60 @@ elements.exportShadow?.addEventListener('click', () => {
     download(`thingy91x-shadow-${Date.now()}.json`, JSON.stringify(lastDeviceRaw, null, 2)); log('info', 'Shadow exportado');
 });
 
+function commitAliasFromHero() {
+    if (!elements.deviceName) return;
+    const v = setDeviceAlias(config.deviceId, elements.deviceName.textContent);
+    elements.deviceName.textContent = v;
+    updateSituacaoLine({ alias: v });
+    log('ok', 'Nome operacional salvo', v);
+}
+elements.copyDeviceId?.addEventListener('click', async () => {
+    const id = elements.deviceId?.textContent?.trim() || config.deviceId || '';
+    if (!id || id === '—' || id === '-') return log('warn', 'Sem UUID para copiar');
+    try {
+        await navigator.clipboard.writeText(id);
+        if (elements.copyDeviceId) {
+            elements.copyDeviceId.classList.add('copied');
+            elements.copyDeviceId.textContent = 'Copiado';
+            setTimeout(() => {
+                elements.copyDeviceId.classList.remove('copied');
+                elements.copyDeviceId.textContent = 'Copiar';
+            }, 1200);
+        }
+        log('ok', 'UUID copiado');
+    } catch (e) {
+        log('warn', 'Falha ao copiar UUID', e.message);
+    }
+});
+elements.aliasEditBtn?.addEventListener('click', () => {
+    if (!elements.deviceName) return;
+    elements.deviceName.focus();
+    try {
+        const range = document.createRange();
+        range.selectNodeContents(elements.deviceName);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    } catch { /* ignore */ }
+});
+elements.deviceName?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); elements.deviceName.blur(); }
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        applyAliasToHero(config.deviceId);
+        elements.deviceName.blur();
+    }
+});
+elements.deviceName?.addEventListener('blur', commitAliasFromHero);
+
 document.addEventListener('DOMContentLoaded', () => {
+
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=18', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=19', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v18';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v18').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v19';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v19').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }
