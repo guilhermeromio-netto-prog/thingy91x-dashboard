@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=19">
+    <link rel="stylesheet" href="styles.css?v=20">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -354,6 +354,7 @@
                     <label for="deviceIdInput">Device ID (UUID / CoAP client ID)</label>
                     <input type="text" id="deviceIdInput" placeholder="50423451-3737-4337-80fc-110bddf418ff" />
                 </div>
+                <p class="modal-link" id="mobileAuthHint" style="color:#E20074;font-weight:600">No celular: as chaves não sincronizam com o Mac — cole de novo User API Key/OAT (obrigatório) e, se tiver, a API Key da equipe.</p>
                 <p class="modal-link">Memfault: perfil → User API Key (com e-mail) ou Admin → Organization Auth Tokens (OAT, e-mail vazio). GPS/sensores: menu ☰ → User Account → Current Team Details → API key (hex). Docs: <a href="https://docs.memfault.com/docs/legacy-nrfcloud/tokens-and-keys.md" target="_blank" rel="noopener">tokens e keys</a>.</p>
             </div>
             <footer class="modal-footer">
@@ -364,6 +365,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=19"></script>
+    <script src="app.js?v=20"></script>
 </body>
 </html>

@@ -293,7 +293,16 @@ async function nrfFetch(path, options = {}) {
     const latency = Date.now() - t0;
     if (!res.ok) {
         const eb = await res.json().catch(() => ({}));
-        const msg = eb.message || eb.error || eb.detail || eb.feature || `HTTP ${res.status}`;
+        const raw = eb.message ?? eb.error ?? eb.detail ?? eb.feature ?? eb.title ?? null;
+        let msg;
+        if (raw == null || raw === '') msg = `HTTP ${res.status}`;
+        else if (typeof raw === 'string') msg = raw;
+        else if (typeof raw === 'object') {
+            msg = raw.message || raw.error || raw.detail || raw.code || JSON.stringify(raw).slice(0, 120);
+        } else msg = String(raw);
+        if (/401|403/.test(String(res.status))) {
+            msg = 'Não autorizado — abra a engrenagem e cole User API Key/OAT (e Simple Token da equipe se tiver). Neste celular as chaves não vêm do Mac.';
+        }
         log('err', `✕ ${path} [${res.status}] ${msg}`, `${latency}ms`);
         throw new Error(`HTTP ${res.status}: ${msg}`);
     }
@@ -1408,7 +1417,7 @@ async function fetchAndUpdate() {
             if (fallback && applyPositionFromPoint(fallback, fallback.serviceType || fallback.src || 'trilha')) {
                 // position shown from history/local
             } else if (!healthy) {
-                setText(elements.gpsCoords, 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
+                setText(elements.gpsCoords, (location.hostname.includes('github.io') || location.hostname.includes('netlify')) ? 'Sem fix — configure as chaves na engrenagem (cloud). USB só no Mac.' : 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
             } else if (src === 'cloud_pending' || /loc_cloud|pending/i.test(ser?.rawNotes || '')) {
                 setText(elements.gpsCoords, 'Sem fix — pedido Wi‑Fi/célula na nuvem (ainda sem coordenadas)');
             } else if (aps >= 2) {
@@ -1435,7 +1444,7 @@ async function fetchAndUpdate() {
         // Refresh trail every successful poll (failures logged once)
         await loadTrail({ quiet: true });
     } catch (e) {
-        log('err', `Poll: ${e.message}`); setStatus(false, `Erro: ${e.message.slice(0, 60)}`);
+        const short = /401|403/.test(e.message) ? 'Erro: 401 — configure a engrenagem neste celular' : `Erro: ${e.message.slice(0, 48)}`; log('err', `Poll: ${e.message}`); setStatus(false, short);
         if (/401|403/.test(e.message)) showModal();
     }
 }
@@ -1667,10 +1676,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=19', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=20', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v19';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v19').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v20';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v20').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }
