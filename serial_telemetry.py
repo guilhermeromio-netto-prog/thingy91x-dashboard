@@ -22,6 +22,7 @@ OUT = DASH / "serial-telemetry.json"
 OUT_ALT = Path("/tmp/thingy-serial-telemetry.json")
 PID_FILE = DASH / "serial_telemetry.pid"
 BAUD = 115200
+WIFI_PROBE_DONE = False  # process-level; ATT usually has no wifi shell
 POLL_S = float(os.environ.get("THINGY_SERIAL_POLL", "10"))
 
 # Zephyr shell form: "at AT..."
@@ -768,22 +769,22 @@ def main():
                         ser.reset_input_buffer()
                     except Exception:
                         pass
-                    # One-shot Zephyr wifi scan (shell) — ATT often lacks `wifi`; never block AT loop
-                    if not state.get("_wifiProbeDone"):
-                        state["_wifiProbeDone"] = True
+                    # One-shot Zephyr wifi scan (shell) — ATT usually lacks `wifi`; never block AT loop
+                    global WIFI_PROBE_DONE
+                    if not WIFI_PROBE_DONE:
+                        WIFI_PROBE_DONE = True
                         try:
-                            for wcmd in ("wifi scan", "net wifi scan"):
+                            for wcmd in ("wifi scan",):
                                 ser.write((wcmd + "\n").encode())
-                                time.sleep(0.15)
-                            wraw = drain(ser, 2.5)
+                                time.sleep(0.1)
+                            wraw = drain(ser, 1.2)
                             if wraw:
-                                txt = wraw.decode(errors="replace")
-                                ingest_text(txt, state)
-                                print(
-                                    f"[serial_telemetry] wifi scan probe → "
-                                    f"{len(state.get('wifiAps') or [])} usable APs",
-                                    flush=True,
-                                )
+                                ingest_text(wraw.decode(errors="replace"), state)
+                            print(
+                                f"[serial_telemetry] wifi scan probe → "
+                                f"{len(state.get('wifiAps') or [])} usable APs",
+                                flush=True,
+                            )
                         except Exception as e:
                             print(f"[serial_telemetry] wifi scan probe skip: {e}", flush=True)
 
