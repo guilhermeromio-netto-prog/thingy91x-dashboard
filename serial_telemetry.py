@@ -769,15 +769,15 @@ def main():
                         ser.reset_input_buffer()
                     except Exception:
                         pass
-                    # One-shot Zephyr wifi scan (shell) — ATT usually lacks `wifi`; never block AT loop
+                    # ATT shell has no `wifi` command; APs come from location_module UART lines.
+                    # Optional probe only if THINGY_WIFI_PROBE=1 (Zephyr wifi shell builds).
                     global WIFI_PROBE_DONE
-                    if not WIFI_PROBE_DONE:
+                    if not WIFI_PROBE_DONE and os.environ.get("THINGY_WIFI_PROBE", "").strip() in ("1", "true", "yes"):
                         WIFI_PROBE_DONE = True
                         try:
-                            for wcmd in ("wifi scan",):
-                                ser.write((wcmd + "\n").encode())
-                                time.sleep(0.1)
-                            wraw = drain(ser, 1.2)
+                            ser.write(b"wifi scan\n")
+                            time.sleep(0.1)
+                            wraw = drain(ser, 2.0)
                             if wraw:
                                 ingest_text(wraw.decode(errors="replace"), state)
                             print(
@@ -787,6 +787,8 @@ def main():
                             )
                         except Exception as e:
                             print(f"[serial_telemetry] wifi scan probe skip: {e}", flush=True)
+                    elif not WIFI_PROBE_DONE:
+                        WIFI_PROBE_DONE = True
 
                 for cmd in AT_CMDS:
                     try:
