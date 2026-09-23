@@ -40,8 +40,8 @@ function resolvePollMs() {
     const h = location.hostname;
     // Local / tunnel: faster poll helps USB serial overlay
     if (h === 'localhost' || h === '127.0.0.1' || /trycloudflare\.com$/i.test(h)) return 10000;
-    // github.io + other public HTTPS via Netlify API: 1 min
-    return 60000;
+    // github.io + other public HTTPS via Netlify API: polite but visible refresh
+    return 20000;
 }
 const POLL_MS = resolvePollMs();
 let lastConnected = null, lastSeenTs = null, lastBatteryPct = null;
@@ -53,6 +53,11 @@ let geo = JSON.parse(localStorage.getItem('thingy_geo') || 'null');
 let geoCircle = null, geoInside = null;
 const logCount = { api: 0, err: 0 };
 let lastPollAuthFail = false;
+let lastSuccessfulPollAt = null;
+let lastNetPayloadAt = null;
+let stripRefreshing = false;
+let connectivityAgeTimer = null;
+let lastStripContext = null;
 
 const $ = id => document.getElementById(id);
 const elements = {
@@ -83,6 +88,11 @@ const elements = {
     envAge: $('envAge'), batteryAge: $('batteryAge'), gpsAge: $('gpsAge'), netAge: $('netAge'),
     netEmptyHint: $('netEmptyHint'), motionEmptyHint: $('motionEmptyHint'),
     motionSpeedWrap: $('motionSpeedWrap'), motionSpeed: $('motionSpeed'),
+    connectivityStrip: $('connectivityStrip'), cardNetwork: $('cardNetwork'),
+    stripCloud: $('stripCloud'), stripCell: $('stripCell'), stripQuality: $('stripQuality'),
+    stripLastPoll: $('stripLastPoll'), stripNetAge: $('stripNetAge'), stripPollMs: $('stripPollMs'),
+    stripHint: $('stripHint'), stripRefreshStatus: $('stripRefreshStatus'),
+    refreshNowBtn: $('refreshNowBtn'),
 };
 function setText(el, v) { if (el) el.textContent = v; }
 
@@ -173,7 +183,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=22#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=23#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -396,6 +406,191 @@ function updateConnPanel({ connected, lastSeen, lastMsg, msgCount, latency }) {
     setText(elements.connLastMsg, lastMsg ? `${new Date(lastMsg).toLocaleString('pt-BR')} (${timeAgo(lastMsg)})` : '—');
     setText(elements.connMsgCount, msgCount ?? '—');
     setText(elements.connLatency, latency != null ? `${latency} ms` : '—');
+    setText(elements.connPoll, `${POLL_MS / 1000}s`);
+}
+
+/** Short carrier name for header pill (no PLMN digits). */
+function shortOperatorName(parsed = {}) {
+    const plmn = parsed.mccMnc != null ? String(parsed.mccMnc).trim() : '';
+    const hint = plmnHint(plmn);
+    let name = (parsed.operator != null && parsed.operator !== '' && parsed.operator !== '—')
+        ? String(parsed.operator).trim() : '';
+    if (!name || name === plmn || /^\d{5,6}$/.test(name)) name = hint || '';
+    if (name.includes('·')) name = name.split('·')[0].trim();
+    return name || hint || '';
+}
+
+function hasCellularPayload(parsed = {}, fromMsg = {}) {
+    // DISPONÍVEL only with real radio markers (MCC / cell / RSRP) — not SIM-only
+    const rsrp = fromMsg.rsrp ?? parsed.rsrp;
+    return !!(parsed.mccMnc || fromMsg.mccMnc || parsed.cellId != null || parsed.eci != null
+        || parsed.tac != null || rsrp != null);
+}
+
+function buildHeaderConnLabel(connected, parsed = {}, fromMsg = {}) {
+    if (!config.apiKey) return 'Sem chave';
+    if (lastPollAuthFail) return 'Sem chave';
+    if (connected === false) return 'Offline';
+    if (connected !== true) return connected == null ? '?' : 'Desconhecido';
+    const cell = hasCellularPayload(parsed, fromMsg);
+    if (!cell) return 'Online · sem rede LTE';
+    const op = shortOperatorName(parsed);
+    const mode = String(parsed.networkMode || parsed.accessTech || 'LTE').toUpperCase();
+    const modeShort = /NB/i.test(mode) ? 'NB-IoT' : /LTE|CAT|EUTRA|EMTC/i.test(mode) ? 'LTE' : mode.slice(0, 8);
+    return op ? `Online · ${modeShort} ${op}` : `Online · ${modeShort}`;
+}
+
+function setStripClass(el, kind) {
+    if (!el) return;
+    el.classList.remove('ok', 'warn', 'err', 'muted');
+    if (kind) el.classList.add(kind);
+}
+
+function pulseConnectivity() {
+    const strip = elements.connectivityStrip;
+    const card = elements.cardNetwork;
+    [strip, card].forEach(el => {
+        if (!el) return;
+        el.classList.remove('poll-pulse');
+        // restart animation
+        void el.offsetWidth;
+        el.classList.add('poll-pulse');
+    });
+}
+
+function setStripRefreshing(on) {
+    stripRefreshing = !!on;
+    elements.connectivityStrip?.classList.toggle('is-refreshing', !!on);
+    if (elements.stripRefreshStatus) {
+        if (on) {
+            elements.stripRefreshStatus.hidden = false;
+            elements.stripRefreshStatus.textContent = 'Atualizando…';
+        } else {
+            elements.stripRefreshStatus.hidden = true;
+            elements.stripRefreshStatus.textContent = '';
+        }
+    }
+    if (elements.refreshNowBtn) elements.refreshNowBtn.disabled = !!on;
+}
+
+function renderConnectivityAges() {
+    if (elements.stripLastPoll) {
+        if (stripRefreshing) {
+            setText(elements.stripLastPoll, 'Atualizando…');
+            setStripClass(elements.stripLastPoll, 'muted');
+        } else if (lastSuccessfulPollAt) {
+            const ts = new Date(lastSuccessfulPollAt).toLocaleTimeString('pt-BR', { hour12: false });
+            setText(elements.stripLastPoll, `${ts} · atualizado ${timeAgo(lastSuccessfulPollAt)}`);
+            setStripClass(elements.stripLastPoll, 'ok');
+        } else {
+            setText(elements.stripLastPoll, 'ainda não');
+            setStripClass(elements.stripLastPoll, 'muted');
+        }
+    }
+    if (elements.stripNetAge) {
+        if (lastNetPayloadAt) {
+            const ts = new Date(lastNetPayloadAt).toLocaleTimeString('pt-BR', { hour12: false });
+            setText(elements.stripNetAge, `${ts} · ${timeAgo(lastNetPayloadAt)}`);
+            const s = Math.floor((Date.now() - new Date(lastNetPayloadAt).getTime()) / 1000);
+            setStripClass(elements.stripNetAge, Number.isFinite(s) && s > 300 ? 'warn' : 'ok');
+        } else {
+            setText(elements.stripNetAge, 'sem payload de rede');
+            setStripClass(elements.stripNetAge, 'muted');
+        }
+    }
+    setText(elements.stripPollMs, `a cada ${POLL_MS / 1000}s`);
+}
+
+function updateConnectivityStrip({ connected, parsed = {}, fromMsg = {} } = {}) {
+    lastStripContext = { connected, parsed, fromMsg };
+    const online = connected === true;
+    const offline = connected === false;
+    const cell = hasCellularPayload(parsed, fromMsg);
+    const rsrp = fromMsg.rsrp ?? parsed.rsrp;
+    const op = formatOperator(parsed.operator, parsed.mccMnc);
+    const onPages = /github\.io|netlify/i.test(location.hostname || '');
+    const noTeam = !config.teamApiKey;
+
+    // Estado nuvem
+    if (elements.stripCloud) {
+        if (online) { setText(elements.stripCloud, 'ONLINE'); setStripClass(elements.stripCloud, 'ok'); }
+        else if (offline) { setText(elements.stripCloud, 'OFFLINE'); setStripClass(elements.stripCloud, 'err'); }
+        else { setText(elements.stripCloud, '?'); setStripClass(elements.stripCloud, 'muted'); }
+    }
+
+    // Rede celular
+    if (elements.stripCell) {
+        if (offline) {
+            setText(elements.stripCell, 'INDISPONÍVEL');
+            setStripClass(elements.stripCell, 'err');
+        } else if (cell) {
+            setText(elements.stripCell, 'DISPONÍVEL');
+            setStripClass(elements.stripCell, 'ok');
+        } else {
+            setText(elements.stripCell, 'SEM DADOS');
+            setStripClass(elements.stripCell, 'warn');
+        }
+    }
+
+    // Qualidade
+    if (elements.stripQuality) {
+        if (rsrp != null || (op && op !== '—')) {
+            const parts = [];
+            if (rsrp != null) parts.push(`RSRP ${rsrp} dBm`);
+            if (op && op !== '—') parts.push(op);
+            setText(elements.stripQuality, parts.join(' · '));
+            setStripClass(elements.stripQuality, 'ok');
+        } else {
+            setText(elements.stripQuality, '—');
+            setStripClass(elements.stripQuality, 'muted');
+        }
+    }
+
+    if (cell) {
+        lastNetPayloadAt = fromMsg.netAt || fromMsg.latestAt || parsed.lastSeen || lastNetPayloadAt || lastSuccessfulPollAt;
+    }
+
+    // Hint honest empty / token
+    if (elements.stripHint) {
+        if (!config.apiKey) {
+            elements.stripHint.hidden = false;
+            elements.stripHint.classList.add('need-token');
+            elements.stripHint.textContent = 'Configure a User API Key na engrenagem para ver a nuvem.';
+        } else if (!cell && noTeam && onPages) {
+            elements.stripHint.hidden = false;
+            elements.stripHint.classList.add('need-token');
+            elements.stripHint.textContent = 'ListMessages precisa da Simple Token da equipe (engrenagem) para MCC/célula/RSRP. Sem ela a Rede celular fica SEM DADOS.';
+        } else if (!cell && offline) {
+            elements.stripHint.hidden = false;
+            elements.stripHint.classList.remove('need-token');
+            elements.stripHint.textContent = 'Dispositivo offline — sem dados celulares recentes na nuvem.';
+        } else if (!cell) {
+            elements.stripHint.hidden = false;
+            elements.stripHint.classList.remove('need-token');
+            elements.stripHint.textContent = 'Sem DEVICE/SCELL/RSRP nas mensagens e sem networkInfo no shadow (ATT 1.5).';
+        } else {
+            elements.stripHint.hidden = true;
+            elements.stripHint.textContent = '';
+            elements.stripHint.classList.remove('need-token');
+        }
+    }
+
+    renderConnectivityAges();
+}
+
+function startConnectivityAgeTicker() {
+    if (connectivityAgeTimer) clearInterval(connectivityAgeTimer);
+    connectivityAgeTimer = setInterval(() => {
+        renderConnectivityAges();
+        // keep conn panel ages fresh too
+        if (lastStripContext) {
+            const { connected } = lastStripContext;
+            // refresh header age-less label stays; connLastSeen refreshed via lastDeviceRaw if present
+        }
+        if (elements.connLastSeen && lastSeenTs) {
+            setText(elements.connLastSeen, `${new Date(lastSeenTs).toLocaleString('pt-BR')} (${timeAgo(lastSeenTs)})`);
+        }
+    }, 1000);
 }
 
 /* ---------- API ---------- */
@@ -1130,6 +1325,9 @@ function updateUI(parsed, fromMsg) {
         missing: hasCellFields ? 'sem timestamp' : (offline ? 'offline' : 'sem networkInfo'),
     });
 
+    if (hasCellFields && netTs) lastNetPayloadAt = netTs;
+    updateConnectivityStrip({ connected: parsed.connected, parsed, fromMsg });
+
     updateSituacaoLine({
         alias,
         connected: parsed.connected,
@@ -1644,10 +1842,18 @@ function checkGeofence(lat, lon) {
 }
 
 /* ---------- Poll ---------- */
-async function fetchAndUpdate() {
+async function fetchAndUpdate(opts = {}) {
     // Pausar poll enquanto o modal de config está aberto
     if (elements.configModal?.classList.contains('show')) return;
-    if (!config.apiKey) { lastPollAuthFail = true; updateAuthBanner(); showModal(); return; }
+    if (!config.apiKey) {
+        lastPollAuthFail = true;
+        updateAuthBanner();
+        setStatus(false, 'Sem chave');
+        updateConnectivityStrip({ connected: null, parsed: {}, fromMsg: {} });
+        showModal();
+        return;
+    }
+    if (opts.manual) setStripRefreshing(true);
     try {
         if (!config.deviceId || !deviceList.length) await loadFleet(true);
         if (!config.deviceId) throw new Error('Sem dispositivos na conta');
@@ -1729,9 +1935,12 @@ async function fetchAndUpdate() {
         const on = parsed.connected === true;
         lastPollAuthFail = false;
         updateAuthBanner();
-        setStatus(on, on ? 'Conectado' : parsed.connected === false ? 'Offline' : 'Desconhecido');
+        lastSuccessfulPollAt = Date.now();
+        setStatus(on, buildHeaderConnLabel(parsed.connected, parsed, fromMsg));
         updateConnPanel({ connected: parsed.connected, lastSeen: parsed.lastSeen, lastMsg: fromMsg.latestAt || serial?.updatedAt, msgCount: messages.length, latency });
         updateUI(parsed, fromMsg); renderMsgTable(messages); updateSourceBadge();
+        pulseConnectivity();
+        setStripRefreshing(false);
         const apps = Object.keys(fromMsg.byApp || {});
         const st = lastTrail.length ? [...new Set(lastTrail.map(t => t.serviceType).filter(Boolean))].join(',') : '';
         if (st) setText(elements.serviceType, st);
@@ -1742,13 +1951,17 @@ async function fetchAndUpdate() {
         await loadTrail({ quiet: true });
     } catch (e) {
         const isAuth = /401|403|Nenhuma chave|Chave rejeitada|Sem API key/i.test(e.message);
-        const short = isAuth ? 'Erro: 401 — configure a engrenagem neste celular' : `Erro: ${e.message.slice(0, 48)}`;
+        const short = isAuth ? 'Sem chave' : `Erro: ${e.message.slice(0, 48)}`;
         log('err', `Poll: ${e.message}`);
         setStatus(false, short);
+        setStripRefreshing(false);
         if (isAuth) {
             lastPollAuthFail = true;
             updateAuthBanner();
+            updateConnectivityStrip({ connected: false, parsed: {}, fromMsg: {} });
             showModal();
+        } else {
+            renderConnectivityAges();
         }
     }
 }
@@ -1822,13 +2035,21 @@ async function loadTrail(opts = {}) {
 }
 function init() {
     updateAuthBanner();
-    if (!config.apiKey) { showModal(); log('warn', 'Sem User API Key / OAT'); return; }
+    setText(elements.connPoll, `${POLL_MS / 1000}s`);
+    setText(elements.stripPollMs, `a cada ${POLL_MS / 1000}s`);
+    startConnectivityAgeTicker();
+    if (!config.apiKey) {
+        setStatus(false, 'Sem chave');
+        updateConnectivityStrip({ connected: null, parsed: {}, fromMsg: {} });
+        showModal();
+        log('warn', 'Sem User API Key / OAT');
+        return;
+    }
     if (!config.email) log('info', 'Sem e-mail — usando Bearer (OAT) no Memfault.');
     if (!config.teamApiKey) log('warn', 'Sem API Key da equipe — GPS/sensores (ListMessages) vão dar 401.');
     initMap(); fetchAndUpdate(); loadTrail();
     if (pollInterval) clearInterval(pollInterval);
-    pollInterval = setInterval(fetchAndUpdate, POLL_MS);
-    setText(elements.connPoll, `${POLL_MS / 1000}s`);
+    pollInterval = setInterval(() => fetchAndUpdate(), POLL_MS);
     try { if (Notification.permission === 'default') Notification.requestPermission(); } catch { }
 }
 
@@ -1857,6 +2078,10 @@ elements.exportLog?.addEventListener('click', () => { download(`thingy91x-log-${
 elements.deviceSelect?.addEventListener('change', e => switchDevice(e.target.value));
 elements.refreshFleet?.addEventListener('click', () => loadFleet(false));
 elements.pollFleet?.addEventListener('click', () => loadFleet(false));
+elements.refreshNowBtn?.addEventListener('click', () => {
+    log('info', 'Atualizar agora (manual)');
+    fetchAndUpdate({ manual: true });
+});
 
 elements.sendDesired?.addEventListener('click', async () => {
     if (!config.deviceId) return log('warn', 'Sem device selecionado');
@@ -1988,10 +2213,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=22', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=23', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v22';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v22').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v23';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v23').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

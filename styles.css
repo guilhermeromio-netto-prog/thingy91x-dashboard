@@ -640,3 +640,94 @@ body.has-auth-banner .app { padding-bottom: 72px; }
         font-size: 1rem;
     }
 }
+
+
+/* Conectividade strip (Rede card) */
+.connectivity-strip {
+    background: linear-gradient(135deg, #f8f9fa 0%, #eef2f7 100%);
+    border: 1px solid #dfe6e9;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+.conn-strip-title {
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #636e72;
+    margin-bottom: 8px;
+}
+.conn-strip-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+}
+@media (min-width: 640px) {
+    .conn-strip-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.conn-strip-item {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.conn-strip-label {
+    font-size: .65rem;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: #636e72;
+}
+.conn-strip-value {
+    font-weight: 700;
+    font-size: .9rem;
+    color: #2d3436;
+    word-break: break-word;
+}
+.conn-strip-value.ok { color: #00b894; }
+.conn-strip-value.warn { color: #e17055; }
+.conn-strip-value.err { color: #d63031; }
+.conn-strip-value.muted { color: #636e72; }
+.conn-strip-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+.conn-strip-status {
+    font-size: .8rem;
+    font-weight: 600;
+    color: #0984e3;
+}
+.conn-strip-status[hidden] { display: none !important; }
+.conn-strip-hint {
+    margin: 8px 0 0;
+    font-size: .78rem;
+    color: #636e72;
+    line-height: 1.35;
+}
+.conn-strip-hint[hidden] { display: none !important; }
+.conn-strip-hint.need-token {
+    color: #b33939;
+    font-weight: 600;
+}
+.connectivity-strip.is-refreshing {
+    outline: 2px solid rgba(9, 132, 227, .45);
+    outline-offset: 1px;
+}
+.connectivity-strip.poll-pulse,
+.card-network.poll-pulse {
+    animation: connPulse .85s ease-out 1;
+}
+@keyframes connPulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 184, 148, .45); }
+    60% { box-shadow: 0 0 0 8px rgba(0, 184, 148, 0); }
+    100% { box-shadow: none; }
+}
+.connection-status .label {
+    max-width: min(52vw, 280px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

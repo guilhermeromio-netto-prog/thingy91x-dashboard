@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=22">
+    <link rel="stylesheet" href="styles.css?v=23">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -174,13 +174,47 @@
                 </article>
 
                 <!-- Network -->
-                <article class="card card-network">
+                <article class="card card-network" id="cardNetwork">
                     <header class="card-header">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M12 19v-4M12 3v2M19 12h-4M3 12h2"/></svg>
                         <h2>Rede</h2>
                         <span class="data-age" id="netAge" title="Idade do dado de rede">—</span>
                     </header>
                     <div class="card-body">
+                        <div class="connectivity-strip" id="connectivityStrip" aria-live="polite">
+                            <div class="conn-strip-title">Conectividade</div>
+                            <div class="conn-strip-grid">
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Estado nuvem</span>
+                                    <span class="conn-strip-value" id="stripCloud">—</span>
+                                </div>
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Rede celular</span>
+                                    <span class="conn-strip-value" id="stripCell">—</span>
+                                </div>
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Qualidade</span>
+                                    <span class="conn-strip-value" id="stripQuality">—</span>
+                                </div>
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Último poll</span>
+                                    <span class="conn-strip-value" id="stripLastPoll">—</span>
+                                </div>
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Dado de rede</span>
+                                    <span class="conn-strip-value" id="stripNetAge">—</span>
+                                </div>
+                                <div class="conn-strip-item">
+                                    <span class="conn-strip-label">Intervalo poll</span>
+                                    <span class="conn-strip-value" id="stripPollMs">—</span>
+                                </div>
+                            </div>
+                            <div class="conn-strip-actions">
+                                <button type="button" class="btn btn-primary btn-sm" id="refreshNowBtn">Atualizar agora</button>
+                                <span class="conn-strip-status" id="stripRefreshStatus" hidden></span>
+                            </div>
+                            <p class="conn-strip-hint" id="stripHint" hidden></p>
+                        </div>
                         <p class="card-empty-hint" id="netEmptyHint" hidden></p>
                         <div class="net-grid" id="netGrid">
                             <div class="net-item"><span class="net-label">Operadora</span><span class="net-value" id="operator">—</span></div>
@@ -378,6 +412,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=22"></script>
+    <script src="app.js?v=23"></script>
 </body>
 </html>
