@@ -1990,7 +1990,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if ('serviceWorker' in navigator) {
         const swHref = new URL('service-worker.js?v=22', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v21';
+        const bustKey = 'thingy_sw_bust_v22';
         caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v22').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
