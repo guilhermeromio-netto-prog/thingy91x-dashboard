@@ -1106,8 +1106,26 @@ elements.exportShadow?.addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
     log('info', 'Dashboard v2 + serial bridge', NRF_CLOUD_BASE);
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=16', document.baseURI || location.href).href;
-        navigator.serviceWorker.register(swHref).catch(() => {});
+        const swHref = new URL('service-worker.js?v=17', document.baseURI || location.href).href;
+        // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
+        const bustKey = 'thingy_sw_bust_v17';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v17').map(k => caches.delete(k)))).catch(() => {});
+        navigator.serviceWorker.getRegistrations().then(async regs => {
+            for (const r of regs) {
+                try { await r.update(); } catch { /* ignore */ }
+            }
+            try {
+                await navigator.serviceWorker.register(swHref);
+            } catch { /* ignore */ }
+            if (!sessionStorage.getItem(bustKey)) {
+                sessionStorage.setItem(bustKey, '1');
+                // um reload só nesta aba após limpar SW velho
+                const controlling = navigator.serviceWorker.controller;
+                if (controlling) {
+                    setTimeout(() => location.reload(), 400);
+                }
+            }
+        }).catch(() => {});
     }
     init(); loadFleet(false);
 });
