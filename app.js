@@ -1,4 +1,4 @@
-/* Thingy:91X Dashboard v28 — Netlify path/query fix + harden playback; redeploy Netlify
+/* Thingy:91X Dashboard v29 — activity-based online (CoAP-safe); redeploy Netlify
  * Dual proxy (Memfault + nRF Cloud):
  *  GET  /devices?pageLimit=100     -> Memfault .../devices
  *  GET  /devices/{id}              -> Memfault device + attributes + nRF FetchDevice(state)
@@ -58,7 +58,7 @@ let lastBatteryAt = null;
 let lastIntelAlerts = [];
 /** Thresholds for remote intelligence (v25) — tunable constants. */
 const INTEL = {
-    OFFLINE_STALE_MS: 20 * 60 * 1000,   // lastSeen >20min → offline stale
+    OFFLINE_STALE_MS: 60 * 60 * 1000,   // v29: offline only past sleeping max (60min)
     DATA_STALE_MS: 30 * 60 * 1000,      // gps/net age
     BATTERY_LOW: 20,
     BATTERY_CRIT: 10,
@@ -74,6 +74,13 @@ const INTEL = {
     STOP_RADIUS_M: 50,
     ALERTS_MAX: 5,
 };
+/** v29 CoAP-safe presence: activity timestamps, not MQTT connected flag. */
+const PRESENCE = {
+    MIN_ONLINE_MS: 15 * 60 * 1000,
+    INTERVAL_FACTOR: 2.5,
+    SLEEPING_MAX_MS: 60 * 60 * 1000,
+};
+let lastPresence = null;
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
 let trailFailLogged = false, lastTrailFitCount = 0;
 let playbackGhost = null;
@@ -224,7 +231,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=28#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=29#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -335,6 +342,146 @@ function timeAgo(ts) {
     if (s < 86400) return `há ${Math.floor(s / 3600)}h`;
     return `há ${Math.floor(s / 86400)}d`;
 }
+
+function toTsMs(v) {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v < 1e12 ? v * 1000 : v;
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : null;
+}
+/** ATT config intervals are usually seconds; values >10000 treated as ms. */
+function pickSampleIntervalSec(src) {
+    const configs = [
+        src?.config,
+        src?.sampleIntervalSec != null ? { update_interval: src.sampleIntervalSec } : null,
+        src?.state?.reported?.config,
+        src?.state?.desired?.config,
+        src?.reported?.config,
+        lastDeviceRaw?.state?.reported?.config,
+        lastDeviceRaw?.state?.desired?.config,
+    ];
+    for (const cfg of configs) {
+        if (!cfg || typeof cfg !== 'object') continue;
+        for (const k of ['update_interval', 'sample_interval', 'gpsInterval']) {
+            const n = Number(cfg[k]);
+            if (Number.isFinite(n) && n > 0) return n > 10000 ? Math.round(n / 1000) : Math.round(n);
+        }
+    }
+    return null;
+}
+function onlineWindowMs(intervalSec) {
+    const fromIv = intervalSec != null ? PRESENCE.INTERVAL_FACTOR * intervalSec * 1000 : 0;
+    return Math.max(PRESENCE.MIN_ONLINE_MS, fromIv);
+}
+function collectActivityMs(opts = {}) {
+    const cands = [];
+    const push = (v) => { const t = toTsMs(v); if (t != null) cands.push(t); };
+    push(opts.lastSeen);
+    push(opts.latestAt);
+    push(opts.netAt);
+    push(opts.gpsAt);
+    push(opts.serialAt);
+    push(opts.shadowMeta);
+    push(opts.batteryAt);
+    push(opts.envAt);
+    if (Array.isArray(opts.msgs)) {
+        for (const m of opts.msgs.slice(0, 40)) {
+            push(m.receivedAt || m.received_at || m.ts || m.timestamp || m.insertedAt);
+        }
+    }
+    if (Array.isArray(opts.trailPts)) {
+        for (const pt of opts.trailPts.slice(-15)) push(pt.at || pt.ts || pt.timestamp);
+    }
+    return cands.length ? Math.max(...cands) : null;
+}
+/**
+ * Activity-based presence for CoAP Asset Tracker.
+ * cloudConnected===true is a bonus → Online. Never treat connected===false alone as Offline.
+ */
+function resolvePresence(opts = {}) {
+    const cloudBonus = opts.cloudConnected === true || opts.connected === true;
+    const intervalSec = opts.intervalSec != null
+        ? opts.intervalSec
+        : pickSampleIntervalSec(opts.parsed || opts.device || opts);
+    const win = onlineWindowMs(intervalSec);
+    const sleepMax = Math.max(PRESENCE.SLEEPING_MAX_MS, win);
+    const activityMs = collectActivityMs(opts);
+    const age = activityMs != null ? Date.now() - activityMs : null;
+    const base = {
+        ageMs: age,
+        activityAt: activityMs != null ? new Date(activityMs).toISOString() : null,
+        onlineWindowMs: win,
+        offlineThresholdMs: sleepMax,
+        intervalSec,
+        cloudConnected: cloudBonus ? true : (opts.cloudConnected === false || opts.connected === false ? false : null),
+    };
+    if (cloudBonus) {
+        return {
+            ...base, kind: 'online', label: 'Online (transmitindo)', shortLabel: 'Online',
+            isOnline: true, isSleeping: false, isOffline: false, hasData: true,
+            cssClass: 'estado-online', stripKind: 'ok', connectedBool: true,
+        };
+    }
+    if (activityMs == null) {
+        return {
+            ...base, kind: 'nodata', label: 'Sem dados', shortLabel: 'Sem dados',
+            isOnline: false, isSleeping: false, isOffline: false, hasData: false,
+            cssClass: 'estado-sem-dados', stripKind: 'muted', connectedBool: null,
+        };
+    }
+    if (age <= win) {
+        return {
+            ...base, kind: 'online', label: 'Online (transmitindo)', shortLabel: 'Online',
+            isOnline: true, isSleeping: false, isOffline: false, hasData: true,
+            cssClass: 'estado-online', stripKind: 'ok', connectedBool: true,
+        };
+    }
+    if (age <= sleepMax) {
+        return {
+            ...base, kind: 'sleeping', label: 'Em espera', shortLabel: 'Em espera',
+            isOnline: false, isSleeping: true, isOffline: false, hasData: true,
+            cssClass: 'estado-espera', stripKind: 'warn', connectedBool: null,
+        };
+    }
+    return {
+        ...base, kind: 'offline', label: 'Offline', shortLabel: 'Offline',
+        isOnline: false, isSleeping: false, isOffline: true, hasData: true,
+        cssClass: 'estado-offline', stripKind: 'err', connectedBool: false,
+    };
+}
+function formatPresenceAge(p) {
+    if (!p || p.ageMs == null) return '';
+    if (p.ageMs < 60000) return `último envio há ${Math.max(1, Math.round(p.ageMs / 1000))}s`;
+    if (p.ageMs < 3600000) return `último envio há ${Math.round(p.ageMs / 60000)} min`;
+    return `último envio há ${Math.round(p.ageMs / 3600000)}h`;
+}
+function presenceWithAgeLabel(p) {
+    if (!p) return '—';
+    const age = formatPresenceAge(p);
+    return age ? `${p.label} · ${age}` : p.label;
+}
+function presenceFromParsed(parsed = {}, fromMsg = {}, extra = {}) {
+    const cloudConnected = parsed.connected === true ? true
+        : (parsed.cloudConnected === true ? true : null);
+    return resolvePresence({
+        cloudConnected,
+        connected: cloudConnected === true ? true : undefined,
+        lastSeen: parsed.lastSeen,
+        latestAt: fromMsg.latestAt,
+        netAt: fromMsg.netAt || lastNetPayloadAt,
+        gpsAt: fromMsg.gpsAt || lastGpsFix?.at,
+        serialAt: lastSerial?.updatedAt || extra.serialAt,
+        shadowMeta: lastDeviceRaw?.$meta?.updatedAt || lastDeviceRaw?._nrf?.$meta?.updatedAt,
+        batteryAt: fromMsg.batteryAt,
+        envAt: fromMsg.envAt,
+        msgs: extra.msgs || lastMessages,
+        trailPts: extra.trailPts || lastTrail,
+        parsed,
+        intervalSec: parsed.sampleIntervalSec,
+        ...extra,
+    });
+}
+
 /** Age label for vitals; marks .atrasado when >5 min. */
 function setDataAge(el, ts, { missing = 'sem timestamp' } = {}) {
     if (!el) return;
@@ -562,7 +709,7 @@ function updateTrailIntelUi(intel) {
     el.textContent = `Resumo da trilha: hoje ${km} km${dur} · ${mov}${stopTxt}`;
 }
 function computeOperationalAlerts({
-    connected, lastSeen, batteryPct, rsrp, gpsAt, netAt, trailPts, geoInsideNow, hasFix,
+    connected, lastSeen, batteryPct, rsrp, gpsAt, netAt, trailPts, geoInsideNow, hasFix, presence,
 } = {}) {
     const alerts = [];
     const push = (level, id, text) => alerts.push({ level, id, text });
@@ -572,13 +719,17 @@ function computeOperationalAlerts({
         return alerts.slice(0, INTEL.ALERTS_MAX);
     }
 
-    const seenAge = ageMs(lastSeen);
-    const offline = connected === false
-        || (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS);
-    if (connected === false) {
-        push('crítico', 'offline', 'Device offline');
-    } else if (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS) {
-        push('crítico', 'stale-seen', `Último visto ${timeAgo(lastSeen)}`);
+    const p = presence || resolvePresence({
+        cloudConnected: connected === true ? true : null,
+        lastSeen, gpsAt, netAt, trailPts,
+    });
+    // Offline alert only past offline threshold (CoAP idle ≠ offline).
+    if (p.kind === 'offline') {
+        push('crítico', 'offline', `Device offline · ${formatPresenceAge(p) || timeAgo(lastSeen)}`);
+    } else if (p.kind === 'sleeping') {
+        push('atenção', 'stale-seen', `Em espera · ${formatPresenceAge(p) || timeAgo(lastSeen)}`);
+    } else if (p.kind === 'nodata') {
+        push('atenção', 'stale-seen', 'Sem dados de atividade na nuvem');
     }
 
     const pct = batteryPct != null ? Number(batteryPct) : null;
@@ -592,10 +743,10 @@ function computeOperationalAlerts({
         push('crítico', 'geo-out', 'Fora da geofence');
     }
 
-    // sparse trail while supposedly online (only if we already have some trail history)
-    if (connected === true && !offline) {
+    // sparse trail while transmitting
+    if (p.isOnline) {
         const since = Date.now() - INTEL.TRAIL_SPARSE_HOURS * 3600 * 1000;
-        const recent = (trailPts || []).filter(p => p.at && new Date(p.at).getTime() >= since);
+        const recent = (trailPts || []).filter(pt => pt.at && new Date(pt.at).getTime() >= since);
         const hasHistory = (trailPts || []).length >= INTEL.TRAIL_SPARSE_MIN_PTS;
         if (hasHistory && recent.length < INTEL.TRAIL_SPARSE_MIN_PTS) {
             push('atenção', 'trail-sparse', `Trilha esparsa (${recent.length} pts / ${INTEL.TRAIL_SPARSE_HOURS}h)`);
@@ -635,8 +786,9 @@ function suggestAcao(alerts, ctx) {
     if (ids.has('gps-stale')) return 'Aguardar novo fix de posição';
     if (ids.has('net-stale')) return 'Atualizar agora ou aguardar poll';
     if (ids.has('trail-sparse')) return 'Aguardar pontos de trilha';
-    if (ctx.connected === true && !ctx.hasFix) return 'Aguardando fix de posição';
-    if (ctx.connected === true) return 'Monitorar — sem ação urgente';
+    if ((ctx.presence?.isOnline || ctx.connected === true) && !ctx.hasFix) return 'Aguardando fix de posição';
+    if (ctx.presence?.isSleeping) return 'Em espera entre uploads (CoAP) — normal';
+    if (ctx.presence?.isOnline || ctx.connected === true) return 'Monitorar — sem ação urgente';
     return 'Configurar chave e aguardar poll';
 }
 function highestRisk(alerts) {
@@ -684,27 +836,24 @@ function updateSituacaoInteligente(opts = {}) {
     const hasFix = !!(lastGpsFix && lastGpsFix.lat != null);
     const gpsAt = lastGpsFix?.at || opts.gpsAt || null;
     const netAt = opts.netAt || lastNetPayloadAt || null;
+    const presence = opts.presence || resolvePresence({
+        cloudConnected: connected === true ? true : null,
+        lastSeen, gpsAt, netAt, trailPts,
+        serialAt: lastSerial?.updatedAt,
+        msgs: lastMessages,
+        parsed: opts.parsed,
+    });
+    lastPresence = presence;
 
-    // Estado
+    // Estado (activity-based)
     let estado = '…';
     let estadoCls = '';
     if (!config.apiKey) {
         estado = 'Sem chave';
         estadoCls = 'estado-sem-chave';
-    } else if (connected === true) {
-        const seenAge = ageMs(lastSeen);
-        if (seenAge != null && seenAge > INTEL.OFFLINE_STALE_MS) {
-            estado = 'Offline';
-            estadoCls = 'estado-offline';
-        } else {
-            estado = 'Online';
-            estadoCls = 'estado-online';
-        }
-    } else if (connected === false) {
-        estado = 'Offline';
-        estadoCls = 'estado-offline';
     } else {
-        estado = '…';
+        estado = presenceWithAgeLabel(presence);
+        estadoCls = presence.cssClass || '';
     }
     setText(elements.sitEstado, estado);
     if (elements.sitCellEstado) {
@@ -739,7 +888,7 @@ function updateSituacaoInteligente(opts = {}) {
 
     const alerts = computeOperationalAlerts({
         connected, lastSeen, batteryPct: pct, rsrp,
-        gpsAt, netAt, trailPts, geoInsideNow, hasFix,
+        gpsAt, netAt, trailPts, geoInsideNow, hasFix, presence,
     });
     const mergedAlerts = mergeAlerts(alerts, lastServerAlerts);
     lastIntelAlerts = mergedAlerts;
@@ -755,7 +904,8 @@ function updateSituacaoInteligente(opts = {}) {
     }
 
     const acao = suggestAcao(mergedAlerts, {
-        connected,
+        connected: presence.connectedBool,
+        presence,
         hasFix,
         hoursLeft: batEst.ok ? batEst.hoursLeft : null,
     });
@@ -785,16 +935,36 @@ function refreshGeofenceUi(lat, lon) {
         if (elements.geoState) elements.geoState.style.color = '#fdcb6e';
     }
 }
-function setStatus(connected, label) {
+function setStatus(connectedOrPresence, label) {
     const el = elements.connectionStatus; if (!el) return;
     el.classList.remove('connected', 'error', 'stale');
-    el.classList.add(connected === true ? 'connected' : connected === false ? 'error' : 'stale');
+    const p = connectedOrPresence && typeof connectedOrPresence === 'object' && connectedOrPresence.kind
+        ? connectedOrPresence : null;
+    if (p) {
+        if (p.kind === 'online') el.classList.add('connected');
+        else if (p.kind === 'offline') el.classList.add('error');
+        else el.classList.add('stale');
+    } else {
+        const connected = connectedOrPresence;
+        el.classList.add(connected === true ? 'connected' : connected === false ? 'error' : 'stale');
+    }
     setText(elements.connLabel, label);
 }
-function updateConnPanel({ connected, lastSeen, lastMsg, msgCount, latency }) {
-    setText(elements.connState, connected === true ? '● ONLINE' : connected === false ? '○ OFFLINE' : '… ?');
-    if (elements.connState) elements.connState.style.color = connected === true ? '#00b894' : connected === false ? '#d63031' : '#636e72';
-    setText(elements.connLastSeen, lastSeen ? `${new Date(lastSeen).toLocaleString('pt-BR')} (${timeAgo(lastSeen)})` : '—');
+function updateConnPanel({ connected, presence, lastSeen, lastMsg, msgCount, latency }) {
+    const p = presence || null;
+    let stateTxt = '… ?';
+    let color = '#636e72';
+    if (p) {
+        if (p.kind === 'online') { stateTxt = '● ONLINE'; color = '#00b894'; }
+        else if (p.kind === 'sleeping') { stateTxt = '◐ EM ESPERA'; color = '#fdcb6e'; }
+        else if (p.kind === 'offline') { stateTxt = '○ OFFLINE'; color = '#d63031'; }
+        else if (p.kind === 'nodata') { stateTxt = '○ SEM DADOS'; color = '#636e72'; }
+    } else if (connected === true) { stateTxt = '● ONLINE'; color = '#00b894'; }
+    else if (connected === false) { stateTxt = '○ OFFLINE'; color = '#d63031'; }
+    setText(elements.connState, stateTxt);
+    if (elements.connState) elements.connState.style.color = color;
+    const activityAt = p?.activityAt || lastSeen;
+    setText(elements.connLastSeen, activityAt ? `${new Date(activityAt).toLocaleString('pt-BR')} (${timeAgo(activityAt)})` : '—');
     setText(elements.connLastMsg, lastMsg ? `${new Date(lastMsg).toLocaleString('pt-BR')} (${timeAgo(lastMsg)})` : '—');
     setText(elements.connMsgCount, msgCount ?? '—');
     setText(elements.connLatency, latency != null ? `${latency} ms` : '—');
@@ -819,9 +989,24 @@ function hasCellularPayload(parsed = {}, fromMsg = {}) {
         || parsed.tac != null || rsrp != null);
 }
 
-function buildHeaderConnLabel(connected, parsed = {}, fromMsg = {}) {
+function buildHeaderConnLabel(connectedOrPresence, parsed = {}, fromMsg = {}) {
     if (!config.apiKey) return 'Sem chave';
     if (lastPollAuthFail) return 'Sem chave';
+    const p = connectedOrPresence && typeof connectedOrPresence === 'object' && connectedOrPresence.kind
+        ? connectedOrPresence : null;
+    if (p) {
+        if (p.kind === 'offline' || p.kind === 'sleeping') return presenceWithAgeLabel(p);
+        if (p.kind === 'nodata') return 'Sem dados';
+        const cell = hasCellularPayload(parsed, fromMsg);
+        const age = formatPresenceAge(p);
+        if (!cell) return age ? `Online · sem rede LTE · ${age}` : 'Online · sem rede LTE';
+        const op = shortOperatorName(parsed);
+        const mode = String(parsed.networkMode || parsed.accessTech || 'LTE').toUpperCase();
+        const modeShort = /NB/i.test(mode) ? 'NB-IoT' : /LTE|CAT|EUTRA|EMTC/i.test(mode) ? 'LTE' : mode.slice(0, 8);
+        const base = op ? `Online · ${modeShort} ${op}` : `Online · ${modeShort}`;
+        return age ? `${base} · ${age}` : base;
+    }
+    const connected = connectedOrPresence;
     if (connected === false) return 'Offline';
     if (connected !== true) return connected == null ? '?' : 'Desconhecido';
     const cell = hasCellularPayload(parsed, fromMsg);
@@ -893,26 +1078,30 @@ function renderConnectivityAges() {
     setText(elements.stripPollMs, `a cada ${POLL_MS / 1000}s`);
 }
 
-function updateConnectivityStrip({ connected, parsed = {}, fromMsg = {} } = {}) {
-    lastStripContext = { connected, parsed, fromMsg };
-    const online = connected === true;
-    const offline = connected === false;
+function updateConnectivityStrip({ connected, presence, parsed = {}, fromMsg = {} } = {}) {
+    const p = presence || presenceFromParsed(parsed, fromMsg);
+    lastStripContext = { connected: p.connectedBool, presence: p, parsed, fromMsg };
+    const online = p.isOnline;
+    const offline = p.isOffline;
+    const sleeping = p.isSleeping;
     const cell = hasCellularPayload(parsed, fromMsg);
     const rsrp = fromMsg.rsrp ?? parsed.rsrp;
     const op = formatOperator(parsed.operator, parsed.mccMnc);
     const onPages = /github\.io|netlify/i.test(location.hostname || '');
     const noTeam = !config.teamApiKey;
 
-    // Estado nuvem
+    // Estado nuvem (activity-based)
     if (elements.stripCloud) {
         if (online) { setText(elements.stripCloud, 'ONLINE'); setStripClass(elements.stripCloud, 'ok'); }
+        else if (sleeping) { setText(elements.stripCloud, 'EM ESPERA'); setStripClass(elements.stripCloud, 'warn'); }
         else if (offline) { setText(elements.stripCloud, 'OFFLINE'); setStripClass(elements.stripCloud, 'err'); }
+        else if (p.kind === 'nodata') { setText(elements.stripCloud, 'SEM DADOS'); setStripClass(elements.stripCloud, 'muted'); }
         else { setText(elements.stripCloud, '?'); setStripClass(elements.stripCloud, 'muted'); }
     }
 
-    // Rede celular
+    // Rede celular — don't mark INDISPONÍVEL solely because CoAP shadow says disconnected
     if (elements.stripCell) {
-        if (offline) {
+        if (offline && !cell) {
             setText(elements.stripCell, 'INDISPONÍVEL');
             setStripClass(elements.stripCell, 'err');
         } else if (cell) {
@@ -956,6 +1145,10 @@ function updateConnectivityStrip({ connected, parsed = {}, fromMsg = {} } = {}) 
             elements.stripHint.hidden = false;
             elements.stripHint.classList.remove('need-token');
             elements.stripHint.textContent = 'Dispositivo offline — sem dados celulares recentes na nuvem.';
+        } else if (!cell && sleeping) {
+            elements.stripHint.hidden = false;
+            elements.stripHint.classList.remove('need-token');
+            elements.stripHint.textContent = 'Em espera entre uploads CoAP — normal para Asset Tracker.';
         } else if (!cell) {
             elements.stripHint.hidden = false;
             elements.stripHint.classList.remove('need-token');
@@ -1468,6 +1661,10 @@ function parseDevice(d) {
         name: d.name || d.nickname || id,
         id,
         connected: rep.connected,
+        sampleIntervalSec: pickSampleIntervalSec({
+            config: rep.config || d.state?.desired?.config || d.state?.reported?.config,
+            state: d.state,
+        }),
         session: rep.sessionIdentifier,
         firmware,
         lastSeen,
@@ -1701,8 +1898,9 @@ function updateUI(parsed, fromMsg) {
         || hasSimFields);
     const locSrc = String(gps.source || lastSerial?.locationSource || telemetrySource.gps || '').toLowerCase();
     const locWifi = /wifi|wi-?fi/.test(locSrc);
-    const online = parsed.connected === true;
-    const offline = parsed.connected === false;
+    const presence = presenceFromParsed(parsed, fromMsg);
+    const online = presence.isOnline;
+    const offline = presence.isOffline;
     const onPages = /github\.io|netlify/i.test(location.hostname || '');
     const noTeam = !config.teamApiKey;
     if (elements.netEmptyHint) {
@@ -1717,6 +1915,8 @@ function updateUI(parsed, fromMsg) {
                 elements.netEmptyHint.textContent = 'Sem dados de rede na nuvem — configure a Simple Token (equipe) na engrenagem para ListMessages (DEVICE/SCELL/RSRP). ATT 1.5 não publica networkInfo no shadow; USB serial só no Mac.';
             } else if (offline) {
                 elements.netEmptyHint.textContent = 'Sem dados de rede — dispositivo offline, sem DEVICE/SCELL nas msgs e sem networkInfo no shadow (ATT 1.5).';
+            } else if (presence.isSleeping) {
+                elements.netEmptyHint.textContent = 'Em espera entre uploads CoAP — sem DEVICE/SCELL recente; USB serial no Mac preenche a Rede.';
             } else {
                 elements.netEmptyHint.textContent = 'Sem networkInfo no shadow (ATT 1.5) e sem DEVICE/SCELL/RSRP em ListMessages. No Mac, USB serial preenche a Rede.';
             }
@@ -1732,14 +1932,16 @@ function updateUI(parsed, fromMsg) {
     });
 
     if (hasCellFields && netTs) lastNetPayloadAt = netTs;
-    updateConnectivityStrip({ connected: parsed.connected, parsed, fromMsg });
+    updateConnectivityStrip({ connected: presence.connectedBool, presence, parsed, fromMsg });
 
     lastBatteryAt = batTs || lastBatteryAt;
     updateSituacaoInteligente({
         alias,
-        connected: parsed.connected,
+        connected: presence.connectedBool,
+        presence,
         batteryPct: batPct,
-        lastSeen: ls || lastSeenTs,
+        lastSeen: presence.activityAt || ls || lastSeenTs,
+        parsed,
         rsrp,
         gpsAt: gps.lat != null ? gpsTs : (lastGpsFix?.at || null),
         netAt: hasCellFields ? netTs : lastNetPayloadAt,
@@ -1774,10 +1976,10 @@ function renderFleetGrid(fleetData) {
         const alias = getDeviceAlias(f.id, f.nickname || f.name || 'Asset Tracker');
         const showAlias = alias && alias !== f.id && alias !== (f.name || '');
         return `<button class="fleet-card${f.id === config.deviceId ? ' active' : ''}" data-id="${f.id}">
-      <span class="fleet-dot" style="background:${f.connected ? '#00b894' : '#d63031'}"></span>
+      <span class="fleet-dot" style="background:${(() => { const pr = resolvePresence({ cloudConnected: f.connected === true ? true : null, lastSeen: f.lastSeen, intervalSec: f.sampleIntervalSec }); return pr.isOnline ? '#00b894' : pr.isSleeping ? '#fdcb6e' : pr.isOffline ? '#d63031' : '#636e72'; })()}"></span>
       <span class="fleet-name">${alias || f.name || f.id}</span>
       ${showAlias && f.name && f.name !== alias ? `<span class="fleet-alias">${escHtml(f.name)}</span>` : ''}
-      <span class="fleet-meta">${f.connected ? 'ONLINE' : 'OFFLINE'} · ${timeAgo(f.lastSeen)}</span>
+      <span class="fleet-meta">${(() => { const pr = resolvePresence({ cloudConnected: f.connected === true ? true : null, lastSeen: f.lastSeen, intervalSec: f.sampleIntervalSec }); return `${pr.shortLabel} · ${timeAgo(f.lastSeen)}`; })()}</span>
     </button>`;
     }).join('') || '—';
     elements.fleetGrid.querySelectorAll('.fleet-card').forEach(b => b.addEventListener('click', () => switchDevice(b.dataset.id)));
@@ -1843,7 +2045,7 @@ function updateMap(lat, lon, acc, opts = {}) {
 }
 function drawFleetMarkers(fleet) {
     fleetMarkers.forEach(m => map.removeLayer(m)); fleetMarkers = [];
-    log('info', `Frota online: ${fleet.filter(f => f.connected).length}/${fleet.length}`);
+    log('info', `Frota online: ${fleet.filter(f => resolvePresence({ cloudConnected: f.connected === true ? true : null, lastSeen: f.lastSeen, intervalSec: f.sampleIntervalSec }).isOnline).length}/${fleet.length}`);
 }
 
 /* ---------- Trail (multi-day) ---------- */
@@ -2146,8 +2348,11 @@ function buildTrailPopupHtml(pt) {
         else if (pt.charging === false) bat += ' · não carrega';
     }
     let status = dash;
-    if (pt.connected === true) status = 'Ligado/Conectado';
-    else if (pt.connected === false) status = 'Offline';
+    if (pt.connected === true) status = 'Online (transmitindo)';
+    else if (pt.lastSeen || pt.at) {
+        const pr = resolvePresence({ cloudConnected: pt.connected === true ? true : null, lastSeen: pt.lastSeen || pt.at });
+        status = presenceWithAgeLabel(pr);
+    } else if (pt.connected === false) status = 'Offline';
     const ambParts = [];
     if (pt.temp != null) ambParts.push(`${Number(pt.temp).toFixed(1)} °C`);
     if (pt.hum != null) ambParts.push(`${Number(pt.hum).toFixed(1)}% UR`);
@@ -2563,15 +2768,16 @@ async function fetchAndUpdate(opts = {}) {
                 setText(elements.gpsCoords, 'Sem fix — aguarde scan Wi‑Fi/célula ou céu aberto (GNSS)');
             }
         }
-        if (lastConnected !== null && lastConnected !== parsed.connected)
-            log(parsed.connected ? 'ok' : 'warn', parsed.connected ? 'CONECTOU' : 'DESCONECTOU', parsed.session || '');
-        lastConnected = parsed.connected;
-        const on = parsed.connected === true;
+        const presence = presenceFromParsed(parsed, fromMsg, { serialAt: serial?.updatedAt, msgs: messages });
+        lastPresence = presence;
+        if (lastConnected !== null && lastConnected !== presence.connectedBool)
+            log(presence.isOnline ? 'ok' : 'warn', presence.isOnline ? 'ATIVIDADE RECENTE' : (presence.isSleeping ? 'EM ESPERA' : 'SEM ATIVIDADE'), parsed.session || '');
+        lastConnected = presence.connectedBool;
         lastPollAuthFail = false;
         updateAuthBanner();
         lastSuccessfulPollAt = Date.now();
-        setStatus(on, buildHeaderConnLabel(parsed.connected, parsed, fromMsg));
-        updateConnPanel({ connected: parsed.connected, lastSeen: parsed.lastSeen, lastMsg: fromMsg.latestAt || serial?.updatedAt, msgCount: messages.length, latency });
+        setStatus(presence, buildHeaderConnLabel(presence, parsed, fromMsg));
+        updateConnPanel({ connected: presence.connectedBool, presence, lastSeen: presence.activityAt || parsed.lastSeen, lastMsg: fromMsg.latestAt || serial?.updatedAt, msgCount: messages.length, latency });
         updateUI(parsed, fromMsg); renderMsgTable(messages); updateSourceBadge();
         pulseConnectivity();
         setStripRefreshing(false);
@@ -2580,7 +2786,8 @@ async function fetchAndUpdate(opts = {}) {
         if (st) setText(elements.serviceType, st);
         const src = overlay.used ? ' +serial' : '';
         log('info', `Poll OK · ${messages.length} msgs [${apps.join(',') || '-'}]${src} · ${timeAgo(fromMsg.latestAt || parsed.lastSeen)}`, `fw ${parsed.firmware} · ${latency}ms · poll ${POLL_MS / 1000}s`);
-        if (parsed.connected === false) log('warn', 'connected=false — sem MQTT. Cheque LTE/SIM/bateria.');
+        if (presence.isOffline) log('warn', `Offline por inatividade (${formatPresenceAge(presence) || 'sem ts'}). CoAP não mantém MQTT.`);
+        else if (parsed.connected === false && presence.isOnline) log('info', 'Shadow connected=false (CoAP) — atividade recente → Online.');
         // Refresh trail every successful poll (failures logged once)
         await loadTrail({ quiet: true });
     } catch (e) {
@@ -2868,10 +3075,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=28', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=29', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v28';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v28').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v29';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v29').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

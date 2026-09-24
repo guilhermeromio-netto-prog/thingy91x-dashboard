@@ -139,13 +139,22 @@ function normalizeDevice(raw, extras = {}) {
   if (!d || typeof d !== 'object') return d;
   const serial = d.device_serial || d.id || d.name || extras.nrfId;
   const lastSeen = d.last_seen || d.updated_date || d.created_date || extras.nrfUpdated || null;
+  const nrfReported = extras.nrfState?.reported || extras.nrfState?.state?.reported || null;
+  // Activity window: max(15min, 2.5× sample/update interval). CoAP has no persistent session —
+  // shadow reported.connected is usually false between uploads; only trust connected===true as a bonus.
+  let intervalSec = null;
+  const cfg = nrfReported?.config || extras.nrfState?.desired?.config || {};
+  for (const k of ['update_interval', 'sample_interval', 'gpsInterval']) {
+    const n = Number(cfg?.[k]);
+    if (Number.isFinite(n) && n > 0) { intervalSec = n > 10000 ? Math.round(n / 1000) : Math.round(n); break; }
+  }
+  const onlineMs = Math.max(ONLINE_MS, intervalSec != null ? Math.round(2.5 * intervalSec * 1000) : 0);
   let connected;
   if (lastSeen) {
     const age = Date.now() - new Date(lastSeen).getTime();
-    connected = Number.isFinite(age) ? age < ONLINE_MS : undefined;
+    connected = Number.isFinite(age) ? age < onlineMs : undefined;
   }
-  const nrfReported = extras.nrfState?.reported || extras.nrfState?.state?.reported || null;
-  if (nrfReported?.connected === true || nrfReported?.connected === false) connected = nrfReported.connected;
+  if (nrfReported?.connected === true) connected = true;
   const flat = flattenAttributes(extras.attributes);
   const fwVer =
     d.last_seen_release?.version ||

@@ -784,6 +784,8 @@ body.has-auth-banner .app { padding-bottom: 72px; }
 .sit-cell.risk-critico .sit-value { color: #ff7675; }
 .sit-cell.estado-online .sit-value { color: #55efc4; }
 .sit-cell.estado-offline .sit-value { color: #ff7675; }
+.sit-cell.estado-espera .sit-value { color: #fdcb6e; }
+.sit-cell.estado-sem-dados .sit-value { color: #b2bec3; }
 .sit-cell.estado-sem-chave .sit-value { color: #fdcb6e; }
 .sit-alertas-wrap {
   margin-top: 10px;

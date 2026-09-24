@@ -1,5 +1,5 @@
 /**
- * Alerts on-demand (v27) — avalia regras simples a partir da nuvem.
+ * Alerts on-demand (v29) — activity-based presence (CoAP-safe); offline só após limiar.
  * GET /.netlify/functions/alerts?deviceId=UUID
  * Auth: mesmos headers do nrfcloud (Authorization / X-User-* / X-Nrf-Team-Key)
  *      + env NRF_TEAM_WRITE_TOKEN (ou NRF_TEAM_READ_TOKEN) para schedule sem headers.
@@ -12,7 +12,10 @@ const DEFAULT_ORG = process.env.MEMFAULT_ORG || 'telekom';
 const DEFAULT_PROJECT = process.env.MEMFAULT_PROJECT || 'nrf-project';
 
 const RULES = {
-  OFFLINE_STALE_MS: Number(process.env.ALERT_OFFLINE_MS || 20 * 60 * 1000),
+  // v29: activity-based. Online window = max(15min, 2.5× interval). Offline only past sleeping max.
+  MIN_ONLINE_MS: Number(process.env.ALERT_ONLINE_MS || 15 * 60 * 1000),
+  SLEEPING_MAX_MS: Number(process.env.ALERT_OFFLINE_MS || 60 * 60 * 1000),
+  INTERVAL_FACTOR: 2.5,
   BATTERY_LOW: Number(process.env.ALERT_BATTERY_LOW || 20),
   BATTERY_CRIT: Number(process.env.ALERT_BATTERY_CRIT || 10),
   RSRP_WEAK: Number(process.env.ALERT_RSRP_WEAK || -110),
@@ -149,33 +152,61 @@ function pickRsrp(device, msgs) {
   return null;
 }
 
+function toTsMs(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v < 1e12 ? v * 1000 : v;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function pickIntervalSec(device) {
+  const configs = [
+    device?.state?.reported?.config,
+    device?.state?.desired?.config,
+    device?.nrfRaw?.state?.reported?.config,
+    device?.nrfRaw?.state?.desired?.config,
+  ];
+  for (const cfg of configs) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    for (const k of ['update_interval', 'sample_interval', 'gpsInterval']) {
+      const n = Number(cfg[k]);
+      if (Number.isFinite(n) && n > 0) return n > 10000 ? Math.round(n / 1000) : Math.round(n);
+    }
+  }
+  return null;
+}
+
 function pickLastSeen(device, msgs) {
   const candidates = [
     device?.last_seen,
     device?.lastSeen,
+    device?.$meta?.updatedAt,
     device?.nrfRaw?.$meta?.updatedAt,
     device?.state?.reported?.$meta?.updatedAt,
+    device?.state?.reported?.connection?.$meta?.updatedAt,
+    device?.state?.reported?.device?.$meta?.updatedAt,
+    device?._memfault?.last_seen,
   ];
+  let best = null;
   for (const c of candidates) {
-    if (c) {
-      const t = new Date(c).getTime();
-      if (Number.isFinite(t)) return t;
-    }
+    const t = toTsMs(c);
+    if (t != null && (best == null || t > best)) best = t;
   }
   const list = Array.isArray(msgs) ? msgs : msgs?.items || msgs?.messages || [];
-  let best = null;
-  for (const m of list.slice(0, 20)) {
-    const at = m.receivedAt || m.ts || m.timestamp || m.insertedAt;
-    if (!at) continue;
-    const t = new Date(at).getTime();
-    if (Number.isFinite(t) && (best == null || t > best)) best = t;
+  for (const m of list.slice(0, 40)) {
+    const at = m.receivedAt || m.received_at || m.ts || m.timestamp || m.insertedAt;
+    const t = toTsMs(at);
+    if (t != null && (best == null || t > best)) best = t;
   }
   return best;
 }
 
-function connectedFlag(device) {
-  if (typeof device?.connected === 'boolean') return device.connected;
-  if (typeof device?.nrfRaw?.connected === 'boolean') return device.nrfRaw.connected;
+/** Cloud MQTT session flag — bonus only (true ⇒ online). CoAP usually reports false. */
+function cloudConnectedBonus(device) {
+  const rep = device?.state?.reported || device?.nrfRaw?.state?.reported || {};
+  if (rep.connected === true) return true;
+  if (device?.connected === true) return true;
+  if (device?.nrfRaw?.connected === true) return true;
   return null;
 }
 
@@ -184,14 +215,27 @@ function evaluateAlerts({ deviceId, device, msgs }) {
   const push = (level, id, text) => alerts.push({ level, id, text, source: 'server' });
   const lastSeenMs = pickLastSeen(device, msgs);
   const age = lastSeenMs != null ? Date.now() - lastSeenMs : null;
-  const connected = connectedFlag(device);
-  const offline =
-    connected === false ||
-    (age != null && age > RULES.OFFLINE_STALE_MS);
-  if (offline) {
+  const cloudOk = cloudConnectedBonus(device);
+  const intervalSec = pickIntervalSec(device);
+  const onlineWin = Math.max(
+    RULES.MIN_ONLINE_MS,
+    intervalSec != null ? Math.round(RULES.INTERVAL_FACTOR * intervalSec * 1000) : 0
+  );
+  const offlineThr = Math.max(RULES.SLEEPING_MAX_MS, onlineWin);
+  let presence = 'nodata';
+  if (cloudOk === true) presence = 'online';
+  else if (age == null) presence = 'nodata';
+  else if (age <= onlineWin) presence = 'online';
+  else if (age <= offlineThr) presence = 'sleeping';
+  else presence = 'offline';
+
+  // Offline alert ONLY past offline threshold (not merely connected===false / CoAP idle).
+  if (presence === 'offline') {
     const mins = age != null ? Math.round(age / 60000) : '?';
     push('crítico', 'offline', `Offline / sem dados há ~${mins} min`);
-  } else if (age != null && age > RULES.DATA_STALE_MS) {
+  } else if (presence === 'sleeping') {
+    push('atenção', 'stale', `Em espera — último envio há ~${Math.round(age / 60000)} min`);
+  } else if (age != null && age > RULES.DATA_STALE_MS && presence === 'online') {
     push('atenção', 'stale', `Dados antigos (~${Math.round(age / 60000)} min)`);
   }
 
@@ -213,16 +257,19 @@ function evaluateAlerts({ deviceId, device, msgs }) {
     deviceId,
     evaluatedAt: new Date().toISOString(),
     rules: {
-      offlineStaleMin: Math.round(RULES.OFFLINE_STALE_MS / 60000),
+      onlineWindowMin: Math.round(onlineWin / 60000),
+      offlineThresholdMin: Math.round(offlineThr / 60000),
       batteryLow: RULES.BATTERY_LOW,
       batteryCrit: RULES.BATTERY_CRIT,
       rsrpWeak: RULES.RSRP_WEAK,
       dataStaleMin: Math.round(RULES.DATA_STALE_MS / 60000),
       geofence: false,
-      note: 'Geofence só no cliente (sem store server-side nesta geração).',
+      note: 'v29 activity-based (CoAP). Geofence só no cliente.',
     },
     snapshot: {
-      connected,
+      presence,
+      cloudConnected: cloudOk,
+      connected: presence === 'online' ? true : presence === 'offline' ? false : null,
       lastSeenMs,
       batteryPct: pct,
       rsrp,
