@@ -5,6 +5,10 @@
 [functions]
   node_bundler = "esbuild"
 
+# Optional cron (Netlify Pro / enabled schedules). Without plan, on-demand GET /alerts still works.
+[functions."alerts-schedule"]
+  schedule = "*/15 * * * *"
+
 [[headers]]
   for = "/manifest.json"
   [headers.values]
@@ -14,6 +18,16 @@
   for = "/service-worker.js"
   [headers.values]
     Cache-Control = "no-cache"
+
+[[redirects]]
+  from = "/api/alerts"
+  to = "/.netlify/functions/alerts"
+  status = 200
+
+[[redirects]]
+  from = "/api/alerts/*"
+  to = "/.netlify/functions/alerts/:splat"
+  status = 200
 
 [[redirects]]
   from = "/api/*"

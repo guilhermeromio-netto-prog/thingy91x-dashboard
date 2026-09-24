@@ -55,10 +55,25 @@ function normalizeC2dBody(raw, deviceId) {
   };
 }
 
-function resolveNrfAuth(rawH, memfaultAuth) {
+function envWriteToken() {
+  return (process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
+}
+
+/** nRF Cloud auth: for writes prefer Netlify env NRF_TEAM_WRITE_TOKEN, else client X-Nrf-Team-Key. */
+function resolveNrfAuth(rawH, memfaultAuth, { forWrite = false } = {}) {
   const team = (rawH['x-nrf-team-key'] || rawH['X-Nrf-Team-Key'] || '').trim().replace(/^(Bearer)\s+/i, '');
+  const envTok = envWriteToken();
+  if (forWrite) {
+    if (envTok) return `Bearer ${envTok}`;
+    if (team) return `Bearer ${team}`;
+    return memfaultAuth;
+  }
   if (team) return `Bearer ${team}`;
   return memfaultAuth;
+}
+
+function writeTokenConfigured() {
+  return !!envWriteToken();
 }
 
 function projectBase(org, project) {
@@ -393,6 +408,16 @@ export async function handler(event) {
   const org = (rawH['x-memfault-org'] || rawH['X-Memfault-Org'] || rawH['x-org-slug'] || DEFAULT_ORG).toString().trim() || DEFAULT_ORG;
   const project = (rawH['x-memfault-project'] || rawH['X-Memfault-Project'] || rawH['x-project-slug'] || DEFAULT_PROJECT).toString().trim() || DEFAULT_PROJECT;
 
+  // Public health — never expose secrets
+  if (path === '/health' || path === '/_health') {
+    return json(200, {
+      ok: true,
+      service: 'nrfcloud',
+      writeTokenConfigured: writeTokenConfigured(),
+      ts: new Date().toISOString(),
+    }, {}, event);
+  }
+
   for (const u of UNSUPPORTED_WRITES) {
     if (u.re.test(path + query)) {
       return json(501, {
@@ -410,7 +435,8 @@ export async function handler(event) {
   if (!auth) {
     return json(401, { error: 'Missing Authorization', detail: 'Basic email:UserAPIKey ou Bearer OAT' });
   }
-  const nrfAuth = resolveNrfAuth(rawH, auth);
+  const isWrite = !!(mapped.write || mapped.kind === 'nrf-state' || mapped.kind === 'nrf-c2d');
+  const nrfAuth = resolveNrfAuth(rawH, auth, { forWrite: isWrite });
 
   const method = event.httpMethod;
   let body;
@@ -447,7 +473,8 @@ export async function handler(event) {
       return json(res.status, {
         error: 'Upstream auth failed for device write',
         feature: mapped.kind,
-        detail: 'Shadow PATCH / c2d need team Simple Token (X-Nrf-Team-Key) with write scope.',
+        detail: 'Shadow PATCH / c2d precisam de NRF_TEAM_WRITE_TOKEN no Netlify (preferido) ou X-Nrf-Team-Key do cliente com escopo de escrita.',
+        writeTokenConfigured: writeTokenConfigured(),
         docs: 'https://docs.memfault.com/docs/legacy-nrfcloud/tokens-and-keys',
         upstream: typeof data === 'object' && data ? data : { raw: data },
       });

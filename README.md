@@ -9,6 +9,8 @@ PT-BR abaixo · English short section at the end.
 
 ## URL pública (GitHub Pages)
 
+**v27:** playback da trilha, sparklines, `NRF_TEAM_WRITE_TOKEN` no Netlify, API `/alerts`. Detalhes em `docs/v27-playback-sparklines-infra.md`.
+
 Dashboard estático em:
 
 **https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/**
@@ -22,7 +24,7 @@ Dashboard estático em:
 ### Opção A — launcher (recomendado)
 
 1. Duplo-clique em `Thingy91X-Dashboard.command` (cópia no Desktop ou nesta pasta).
-2. Deixe o Terminal aberto. Abra **http://localhost:3001/?v=15**
+2. Deixe o Terminal aberto. Abra **http://localhost:3001/?v=27**
 3. O launcher sobe `serial_telemetry.py` + `node proxy.js` (porta **3001**).
 
 ### Opção B — manual
@@ -96,7 +98,7 @@ netlify/functions/nrfcloud.js
 
 ## English (short)
 
-Local: run `Thingy91X-Dashboard.command` or `npm run serve` on port **3001**, open `/?v=15`.  
+Local: run `Thingy91X-Dashboard.command` or `npm run serve` on port **3001**, open `/?v=27`.  
 Auth: Memfault User API Key/OAT for fleet; optional **team Simple Token** (`X-Nrf-Team-Key`) for cloud messages, shadow **PATCH**, and c2d.  
 ATT-friendly desired wraps flat `gpsInterval`/`led`/`buzzer` into `desired.config`.  
 Without Simple Token, writes return explicit 401/403 JSON — GNSS/ListMessages are **not** claimed to work.

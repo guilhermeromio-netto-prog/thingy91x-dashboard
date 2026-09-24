@@ -477,7 +477,7 @@ function writeAuthHint(status, feature) {
       feature,
       status,
       detail:
-        'PATCH /state e c2d precisam de API Key da equipe (Simple Token / team key) com escopo de escrita no portal nRF Cloud (legado). Cole em Engrenagem → API Key da equipe (X-Nrf-Team-Key). OAT/User API Key costuma bastar para leitura Memfault, não para shadow write.',
+        'PATCH /state e c2d: preferem NRF_TEAM_WRITE_TOKEN no ambiente do proxy/Netlify; senão Simple Token na Engrenagem (X-Nrf-Team-Key). OAT só lê Memfault.',
       docs: 'https://docs.memfault.com/docs/legacy-nrfcloud/tokens-and-keys',
       shadowDocs: 'https://api.nrfcloud.com/#tag/IP-Devices/operation/UpdateDeviceState',
     };
@@ -508,10 +508,23 @@ function resolveAuth(req) {
   return auth || null;
 }
 
-/** Simple Token (team API key) for ListMessages / location / FetchDevice — not OAT */
+function envWriteToken() {
+  return (process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
+}
+
+/** Simple Token (team API key) for ListMessages / location / FetchDevice — not OAT.
+ *  Writes (shadow/c2d): prefer NRF_TEAM_WRITE_TOKEN env (parity with Netlify). */
 let _loggedTeamKey = false;
-function resolveNrfAuth(req, memfaultAuth) {
+function resolveNrfAuth(req, memfaultAuth, { forWrite = false } = {}) {
   const team = (req.headers['x-nrf-team-key'] || '').trim().replace(/^(Bearer)\s+/i, '');
+  const envTok = envWriteToken();
+  if (forWrite && envTok) {
+    if (!_loggedTeamKey) {
+      console.log(`[Proxy] write auth via NRF_TEAM_WRITE_TOKEN (len=${envTok.length})`);
+      _loggedTeamKey = true;
+    }
+    return `Bearer ${envTok}`;
+  }
   if (team) {
     if (!_loggedTeamKey) {
       const hex = /^[0-9a-fA-F]{32,64}$/.test(team);
@@ -896,7 +909,8 @@ app.use('/api', async (req, res) => {
       detail: 'Envie Basic (email:User API Key) ou Bearer (Organization Auth Token).',
     });
   }
-  const nrfAuth = resolveNrfAuth(req, auth);
+  const isWrite = !!(mapped.write || mapped.kind === 'nrf-state' || mapped.kind === 'nrf-c2d');
+  const nrfAuth = resolveNrfAuth(req, auth, { forWrite: isWrite });
 
   const method = req.method;
   let body;
@@ -1048,6 +1062,7 @@ app.get('/health', (req, res) =>
     nrfUpstream: NRF_HOST,
     org: DEFAULT_ORG,
     project: DEFAULT_PROJECT,
+    writeTokenConfigured: !!envWriteToken(),
     telemetry: ['messages', 'location/history', 'devices+attributes', 'nrf-includeState', 'serial', 'shadow-PATCH', 'c2d'],
   })
 );

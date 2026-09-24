@@ -1,11 +1,12 @@
-/* Thingy:91X Dashboard v2 — multi-device, comandos, FOTA, geofence, export, PWA
+/* Thingy:91X Dashboard v27 — playback, sparklines, Netlify write token, alerts API
  * Dual proxy (Memfault + nRF Cloud):
  *  GET  /devices?pageLimit=100     -> Memfault .../devices
  *  GET  /devices/{id}              -> Memfault device + attributes + nRF FetchDevice(state)
  *  GET  /messages?deviceId=…       -> nRF Cloud /v1/messages (telemetry)
  *  GET  /location/history?…        -> nRF Cloud /v1/location/history (trail)
+ *  GET  alerts?deviceId=…          -> Netlify on-demand alert rules (Pages)
  * Auth: Memfault Basic/OAT + optional team Simple Token (X-Nrf-Team-Key) for msgs/GPS
- * Writes: shadow PATCH + c2d forwarded to api.nrfcloud.com (need Simple Token). Still 501: legacy FOTA
+ * Writes: prefer NRF_TEAM_WRITE_TOKEN on Netlify; fallback X-Nrf-Team-Key. Still 501: legacy FOTA
  */
 // API base by host:
 //  - localhost / 127.0.0.1          → /api (local Express)
@@ -13,6 +14,7 @@
 //  - *.github.io / other public HTTPS → absolute Netlify function (CORS)
 //  - trycloudflare / same-origin tunnel → /api
 const NETLIFY_FN = 'https://thingy91x-x-dashboard.netlify.app/.netlify/functions/nrfcloud';
+const NETLIFY_ALERTS = 'https://thingy91x-x-dashboard.netlify.app/.netlify/functions/alerts';
 function resolveNrfCloudBase() {
     const h = location.hostname;
     if (h === 'localhost' || h === '127.0.0.1') return '/api';
@@ -23,6 +25,12 @@ function resolveNrfCloudBase() {
     return '/api';
 }
 const NRF_CLOUD_BASE = resolveNrfCloudBase();
+function resolveAlertsUrl() {
+    const h = location.hostname;
+    if (h === 'localhost' || h === '127.0.0.1') return null; // client-only on local
+    if (/netlify\.app$/i.test(h)) return '/.netlify/functions/alerts';
+    return NETLIFY_ALERTS;
+}
 
 const DEVICE_DEFAULT = '50423451-3737-4337-80fc-110bddf418ff';
 let config = {
@@ -68,6 +76,10 @@ const INTEL = {
 };
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
 let trailFailLogged = false, lastTrailFitCount = 0;
+let playbackGhost = null;
+let playback = { playing: false, speed: 1, index: 0, timer: null };
+let lastServerAlerts = [];
+let serverAlertsTimer = null;
 const LOCAL_TRAIL_CAP = 2000;
 let telemetrySource = { env: null, battery: null, net: null, gps: null };
 let geo = JSON.parse(localStorage.getItem('thingy_geo') || 'null');
@@ -111,6 +123,9 @@ const elements = {
     sitAlertas: $('sitAlertas'), sitCellEstado: $('sitCellEstado'), sitCellOnde: $('sitCellOnde'),
     sitCellRisco: $('sitCellRisco'), sitCellAcao: $('sitCellAcao'),
     trailIntel: $('trailIntel'), batteryAutonomia: $('batteryAutonomia'),
+    playbackBar: $('playbackBar'), playbackPlay: $('playbackPlay'), playbackSpeed: $('playbackSpeed'),
+    playbackScrub: $('playbackScrub'), playbackChip: $('playbackChip'),
+    sparkBat: $('sparkBat'), sparkRsrp: $('sparkRsrp'), sparkBatSit: $('sparkBatSit'), sparkRsrpSit: $('sparkRsrpSit'),
     envAge: $('envAge'), batteryAge: $('batteryAge'), gpsAge: $('gpsAge'), netAge: $('netAge'),
     netEmptyHint: $('netEmptyHint'), motionEmptyHint: $('motionEmptyHint'),
     motionSpeedWrap: $('motionSpeedWrap'), motionSpeed: $('motionSpeed'),
@@ -209,7 +224,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=25#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=27#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -726,10 +741,11 @@ function updateSituacaoInteligente(opts = {}) {
         connected, lastSeen, batteryPct: pct, rsrp,
         gpsAt, netAt, trailPts, geoInsideNow, hasFix,
     });
-    lastIntelAlerts = alerts;
-    renderSitAlertas(alerts);
+    const mergedAlerts = mergeAlerts(alerts, lastServerAlerts);
+    lastIntelAlerts = mergedAlerts;
+    renderSitAlertas(mergedAlerts);
 
-    const risk = highestRisk(alerts);
+    const risk = highestRisk(mergedAlerts);
     setText(elements.sitRisco, risk.level);
     setText(elements.sitRiscoReason, risk.reason || '');
     if (elements.sitCellRisco) {
@@ -738,7 +754,7 @@ function updateSituacaoInteligente(opts = {}) {
         elements.sitCellRisco.className = `sit-cell ${cls}`;
     }
 
-    const acao = suggestAcao(alerts, {
+    const acao = suggestAcao(mergedAlerts, {
         connected,
         hasFix,
         hoursLeft: batEst.ok ? batEst.hoursLeft : null,
@@ -2182,6 +2198,221 @@ function renderTrailMarkers(points) {
         trailMarkersLayer.addLayer(cm);
     });
 }
+
+/* ---------- Sparklines (SVG, no chart lib) ---------- */
+const SPARK_MIN_PTS = 3;
+function seriesFromTrail(pts, keyFn) {
+    const out = [];
+    for (const p of pts || []) {
+        const v = keyFn(p);
+        if (v == null || !Number.isFinite(Number(v))) continue;
+        out.push(Number(v));
+    }
+    return out;
+}
+function batterySeries(pts) {
+    return seriesFromTrail(pts, p => {
+        if (p.battery != null) return Number(p.battery);
+        if (p.batteryPct != null) return Number(p.batteryPct);
+        if (p.batteryVoltage != null || p.batteryV != null) {
+            let v = Number(p.batteryVoltage ?? p.batteryV);
+            if (v > 1000) v = v / 1000;
+            if (!Number.isFinite(v)) return null;
+            return Math.max(0, Math.min(100, Math.round((v - 3.2) / 1.0 * 100)));
+        }
+        return null;
+    });
+}
+function rsrpSeries(pts) {
+    return seriesFromTrail(pts, p => (p.rsrp != null ? Number(p.rsrp) : null));
+}
+function sparklineSvg(values, { stroke = '#0984e3', w = 72, h = 22 } = {}) {
+    if (!values || values.length < SPARK_MIN_PTS) {
+        return '<span class="spark-empty">histórico insuficiente</span>';
+    }
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = (max - min) || 1;
+    const n = values.length;
+    const pts = values.map((v, i) => {
+        const x = (i / (n - 1)) * (w - 2) + 1;
+        const y = h - 2 - ((v - min) / span) * (h - 4);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="${pts}"/></svg>`;
+}
+function renderSpark(el, values, stroke) {
+    if (!el) return;
+    el.innerHTML = sparklineSvg(values, { stroke });
+}
+function updateSparklines(trailPts) {
+    const bat = batterySeries(trailPts);
+    const rsrp = rsrpSeries(trailPts);
+    renderSpark(elements.sparkBat, bat, '#00b894');
+    renderSpark(elements.sparkBatSit, bat, '#00b894');
+    renderSpark(elements.sparkRsrp, rsrp, '#0984e3');
+    renderSpark(elements.sparkRsrpSit, rsrp, '#0984e3');
+}
+
+/* ---------- Trail playback (ghost marker) ---------- */
+function ensurePlaybackGhost() {
+    if (!map || playbackGhost) return playbackGhost;
+    playbackGhost = L.circleMarker([0, 0], {
+        radius: 9,
+        color: '#6c5ce7',
+        weight: 2,
+        fillColor: '#a29bfe',
+        fillOpacity: 0.9,
+        opacity: 0.95,
+        className: 'playback-ghost',
+    });
+    playbackGhost.setStyle({ opacity: 0, fillOpacity: 0 });
+    playbackGhost.addTo(map);
+    return playbackGhost;
+}
+function formatPlaybackChip(pt, idx, total) {
+    if (!pt) return 'Sem trilha';
+    const when = pt.at ? new Date(pt.at) : null;
+    const hora = when && !Number.isNaN(when.getTime())
+        ? when.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : 'sem horário';
+    const parts = [`#${idx + 1}/${total}`, hora];
+    let bat = pt.battery ?? pt.batteryPct;
+    if (bat == null && (pt.batteryVoltage != null || pt.batteryV != null)) {
+        let v = Number(pt.batteryVoltage ?? pt.batteryV);
+        if (v > 1000) v /= 1000;
+        if (Number.isFinite(v)) bat = Math.max(0, Math.min(100, Math.round((v - 3.2) / 1.0 * 100)));
+    }
+    if (bat != null) parts.push(`Bat ${Math.round(Number(bat))}%`);
+    if (pt.rsrp != null) parts.push(`RSRP ${pt.rsrp} dBm`);
+    return parts.join(' · ');
+}
+function showPlaybackAt(index, { openPopup = false } = {}) {
+    const pts = lastTrail || [];
+    if (!pts.length) {
+        stopPlayback();
+        if (elements.playbackScrub) { elements.playbackScrub.disabled = true; elements.playbackScrub.max = 0; elements.playbackScrub.value = 0; }
+        if (elements.playbackChip) {
+            elements.playbackChip.textContent = 'Sem pontos na trilha';
+            elements.playbackChip.classList.add('empty');
+            elements.playbackChip.classList.remove('active');
+        }
+        if (playbackGhost) playbackGhost.setStyle({ opacity: 0, fillOpacity: 0 });
+        return;
+    }
+    const i = Math.max(0, Math.min(pts.length - 1, Number(index) || 0));
+    playback.index = i;
+    const pt = pts[i];
+    if (elements.playbackScrub) {
+        elements.playbackScrub.disabled = false;
+        elements.playbackScrub.max = String(pts.length - 1);
+        elements.playbackScrub.value = String(i);
+    }
+    if (elements.playbackChip) {
+        elements.playbackChip.textContent = formatPlaybackChip(pt, i, pts.length);
+        elements.playbackChip.classList.remove('empty');
+        elements.playbackChip.classList.add('active');
+    }
+    if (pt.lat == null || pt.lon == null) return;
+    const g = ensurePlaybackGhost();
+    if (!g) return;
+    g.setLatLng([Number(pt.lat), Number(pt.lon)]);
+    g.setStyle({ opacity: 0.95, fillOpacity: 0.9 });
+    g.bindPopup(buildTrailPopupHtml(pt), { maxWidth: 280, className: 'trail-popup-wrap' });
+    if (openPopup) { try { g.openPopup(); } catch { /* ignore */ } }
+}
+function stopPlayback() {
+    playback.playing = false;
+    if (playback.timer) { clearInterval(playback.timer); playback.timer = null; }
+    if (elements.playbackPlay) elements.playbackPlay.textContent = '▶';
+}
+function tickPlayback() {
+    const pts = lastTrail || [];
+    if (!pts.length) return stopPlayback();
+    let next = playback.index + 1;
+    if (next >= pts.length) { stopPlayback(); return; }
+    showPlaybackAt(next);
+}
+function togglePlayback() {
+    const pts = lastTrail || [];
+    if (pts.length < 2) {
+        if (elements.playbackChip) {
+            elements.playbackChip.textContent = pts.length ? 'Precisa de ≥2 pontos' : 'Sem pontos na trilha';
+            elements.playbackChip.classList.add('empty');
+        }
+        return;
+    }
+    if (playback.playing) { stopPlayback(); return; }
+    playback.playing = true;
+    playback.speed = Number(elements.playbackSpeed?.value || 1) || 1;
+    if (elements.playbackPlay) elements.playbackPlay.textContent = '⏸';
+    if (playback.index >= pts.length - 1) playback.index = 0;
+    showPlaybackAt(playback.index);
+    const ms = Math.max(120, Math.round(800 / playback.speed));
+    playback.timer = setInterval(tickPlayback, ms);
+}
+function syncPlaybackUiFromTrail() {
+    const pts = lastTrail || [];
+    if (!pts.length) {
+        stopPlayback();
+        showPlaybackAt(0);
+        return;
+    }
+    if (playback.index >= pts.length) playback.index = pts.length - 1;
+    showPlaybackAt(playback.index);
+}
+
+/* ---------- Server alerts (Netlify on-demand) ---------- */
+function mergeAlerts(clientAlerts, serverAlerts) {
+    const byId = new Map();
+    for (const a of clientAlerts || []) byId.set(a.id || a.text, a);
+    for (const a of serverAlerts || []) {
+        const id = a.id || a.text;
+        if (!byId.has(id)) byId.set(id, {
+            level: a.level === 'crítico' || a.level === 'critico' ? 'crítico'
+                : a.level === 'atenção' || a.level === 'atencao' || a.level === 'atenção' ? 'atenção'
+                : (a.level || 'atenção'),
+            id,
+            text: a.text || a.message || id,
+            source: 'server',
+        });
+    }
+    const rank = { crítico: 0, atenção: 1, ok: 2 };
+    return [...byId.values()].sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9)).slice(0, INTEL.ALERTS_MAX || 5);
+}
+async function fetchServerAlerts() {
+    const base = resolveAlertsUrl();
+    if (!base || !config.deviceId || !config.apiKey) return;
+    try {
+        const auth = buildAuthHeader();
+        if (!auth) return;
+        const headers = {
+            'Authorization': auth,
+            'X-Memfault-Org': config.orgSlug || 'telekom',
+            'X-Memfault-Project': config.projectSlug || 'nrf-project',
+            'X-Org-Slug': config.orgSlug || 'telekom',
+            'X-Project-Slug': config.projectSlug || 'nrf-project',
+            'X-User-Api-Key': config.apiKey || '',
+            'X-Device-Id': config.deviceId || '',
+        };
+        if (config.email) headers['X-User-Email'] = config.email;
+        if (config.teamApiKey) headers['X-Nrf-Team-Key'] = config.teamApiKey;
+        const url = `${base}?deviceId=${encodeURIComponent(config.deviceId)}`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        lastServerAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+        // Re-render situação with merged alerts if we already have client ones
+        updateSituacaoInteligente({ trailPts: lastTrail });
+    } catch { /* soft — keep client alerts */ }
+}
+function scheduleServerAlerts() {
+    if (serverAlertsTimer) clearInterval(serverAlertsTimer);
+    if (!resolveAlertsUrl()) return;
+    fetchServerAlerts();
+    serverAlertsTimer = setInterval(fetchServerAlerts, 5 * 60 * 1000);
+}
+
 function applyTrailPoints(points) {
     const deduped = dedupeConsecutive((points || []).filter(p => p && p.lat != null && p.lon != null));
     lastTrail = deduped;
@@ -2198,6 +2429,8 @@ function applyTrailPoints(points) {
     }
     // Refresh autonomia / resumo / alertas that depend on trail
     updateSituacaoInteligente({ trailPts: deduped });
+    updateSparklines(deduped);
+    syncPlaybackUiFromTrail();
     return deduped;
 }
 function applyPositionFromPoint(pt, srcLabel) {
@@ -2448,7 +2681,7 @@ function init() {
     updateSituacaoInteligente({});
     if (!config.email) log('info', 'Sem e-mail — usando Bearer (OAT) no Memfault.');
     if (!config.teamApiKey) log('warn', 'Sem API Key da equipe — GPS/sensores (ListMessages) vão dar 401.');
-    initMap(); fetchAndUpdate(); loadTrail();
+    initMap(); fetchAndUpdate(); loadTrail(); scheduleServerAlerts();
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(() => fetchAndUpdate(), POLL_MS);
     try { if (Notification.permission === 'default') Notification.requestPermission(); } catch { }
@@ -2473,6 +2706,16 @@ elements.toggleTrail?.addEventListener('click', () => {
     else { lastTrailFitCount = 0; loadTrail(); }
 });
 elements.trailRange?.addEventListener('change', loadTrail);
+elements.playbackPlay?.addEventListener('click', togglePlayback);
+elements.playbackSpeed?.addEventListener('change', () => {
+    playback.speed = Number(elements.playbackSpeed.value || 1) || 1;
+    if (playback.playing) { stopPlayback(); togglePlayback(); }
+});
+elements.playbackScrub?.addEventListener('input', () => {
+    stopPlayback();
+    showPlaybackAt(Number(elements.playbackScrub.value || 0), { openPopup: true });
+});
+
 elements.clearLog?.addEventListener('click', () => { logStore.length = 0; elements.logPanel.innerHTML = ''; });
 elements.logFilter?.addEventListener('change', rerenderLog);
 elements.exportLog?.addEventListener('click', () => { download(`thingy91x-log-${Date.now()}.json`, JSON.stringify(logStore, null, 2)); log('info', 'Log exportado'); });
@@ -2499,11 +2742,11 @@ elements.sendDesired?.addEventListener('click', async () => {
         fetchAndUpdate();
     } catch (e) {
         const m = String(e.message || e);
-        let hint = 'Se 401/403: cole Simple Token (API Key da equipe) na engrenagem — OAT só lê.';
+        let hint = 'Se 401/403: configure NRF_TEAM_WRITE_TOKEN no Netlify ou cole Simple Token na engrenagem — OAT só lê.';
         if (/Unexpected end of JSON|failed to execute ['"]json['"]/i.test(m)) {
             hint = 'Resposta vazia do proxy/nuvem (ex.: 204). Atualize para v26+; se persistir, confira proxy/Netlify.';
         } else if (/401|403/.test(m)) {
-            hint = 'Auth: cole Simple Token (API Key da equipe) na engrenagem — OAT só lê.';
+            hint = 'Auth: NRF_TEAM_WRITE_TOKEN no Netlify (preferido) ou Simple Token na engrenagem — OAT só lê.';
         }
         log('err', `Desired falhou: ${m}`, hint);
     }
@@ -2513,7 +2756,7 @@ elements.sendPing?.addEventListener('click', async () => {
         await sendC2D(config.deviceId, { ping: Date.now() });
         log('ok', 'Ping c2d enviado (SendDeviceMessage)');
     } catch (e) {
-        log('err', `Ping: ${e.message}`, 'c2d precisa Simple Token; ATT costuma preferir shadow desired/command.');
+        log('err', `Ping: ${e.message}`, 'c2d: NRF_TEAM_WRITE_TOKEN no Netlify ou Simple Token; ATT costuma preferir shadow desired/command.');
     }
 });
 
@@ -2624,10 +2867,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=25', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=27', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v25';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v25').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v27';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v27').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

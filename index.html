@@ -20,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=26">
+    <link rel="stylesheet" href="styles.css?v=27">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
@@ -71,6 +71,16 @@
                                 <div class="sit-cell sit-cell-acao" id="sitCellAcao">
                                     <span class="sit-label">Ação</span>
                                     <span class="sit-value" id="sitAcao">—</span>
+                                </div>
+                            </div>
+                            <div class="sit-sparks" id="sitSparks" aria-label="Sparklines recentes">
+                                <div class="spark-item">
+                                    <span class="spark-label">Bat</span>
+                                    <span class="spark-svg" id="sparkBatSit"></span>
+                                </div>
+                                <div class="spark-item">
+                                    <span class="spark-label">RSRP</span>
+                                    <span class="spark-svg" id="sparkRsrpSit"></span>
                                 </div>
                             </div>
                             <div class="sit-alertas-wrap">
@@ -204,6 +214,10 @@
                             <span id="batteryCharging" class="chip chip-success"></span>
                         </div>
                         <p class="battery-autonomia" id="batteryAutonomia" title="Estimativa a partir do histórico da trilha (só com amostras reais)">Autonomia estimada: sem histórico suficiente</p>
+                        <div class="spark-row" title="Bateria recente (trilha)">
+                            <span class="spark-label">Histórico</span>
+                            <span class="spark-svg" id="sparkBat"></span>
+                        </div>
                     </div>
                 </article>
 
@@ -260,7 +274,7 @@
                             <div class="net-item"><span class="net-label">Cell ID</span><span class="net-value" id="netCellId">—</span></div>
                             <div class="net-item"><span class="net-label">UE Mode</span><span class="net-value" id="netUeMode">—</span></div>
                             <div class="net-item"><span class="net-label">IP</span><span class="net-value" id="netIp">—</span></div>
-                            <div class="net-item"><span class="net-label">RSRP</span><span class="net-value" id="rsrp">—</span></div>
+                            <div class="net-item net-item-spark"><span class="net-label">RSRP</span><span class="net-value" id="rsrp">—</span><span class="spark-svg spark-inline" id="sparkRsrp" title="RSRP recente"></span></div>
                             <div class="net-item"><span class="net-label">RSRQ</span><span class="net-value" id="rsrq">—</span></div>
                             <div class="net-item"><span class="net-label">SNR</span><span class="net-value" id="netSnr">—</span></div>
                             <div class="net-item"><span class="net-label">Wi‑Fi</span><span class="net-value" id="netWifi">—</span></div>
@@ -349,6 +363,15 @@
                         <h2>Localização</h2>
                     </header>
                     <div class="card-body map-body" id="map"></div>
+                    <div class="playback-bar" id="playbackBar" aria-label="Playback da trilha">
+                        <button type="button" class="btn btn-outline btn-sm" id="playbackPlay" title="Play/Pause">▶</button>
+                        <select id="playbackSpeed" aria-label="Velocidade do playback" title="Velocidade">
+                            <option value="1" selected>1×</option>
+                            <option value="5">5×</option>
+                        </select>
+                        <input type="range" id="playbackScrub" min="0" max="0" value="0" step="1" aria-label="Posição na trilha" disabled />
+                        <span class="playback-chip" id="playbackChip" title="Ponto do playback (fantasma)">Sem trilha</span>
+                    </div>
                 </article>
 
                 <!-- Connection + Log -->
@@ -407,7 +430,7 @@
                 <button class="modal-close" id="closeModal" aria-label="Fechar"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </header>
             <div class="modal-body">
-                <p class="modal-hint">Duas chaves diferentes: Memfault (status/FW) e API Key da equipe nRF Cloud (GPS, sensores, trilha). OAT sozinho <strong>não</strong> lê ListMessages.</p>
+                <p class="modal-hint">Duas chaves: Memfault (status/FW) e Simple Token da equipe (GPS/sensores/trilha). OAT sozinho <strong>não</strong> lê ListMessages. Simple Token é opcional no celular se a escrita estiver configurada no Netlify.</p>
                 <div class="form-group">
                     <label for="userEmail">E-mail Memfault <span class="optional">(para User API Key)</span></label>
                     <input type="email" id="userEmail" placeholder="seu@email.com" autocomplete="username" />
@@ -417,8 +440,9 @@
                     <input type="text" id="apiKey" placeholder="User API Key (perfil) ou oat_…" autocomplete="off" spellcheck="false" />
                 </div>
                 <div class="form-group">
-                    <label for="teamApiKey">API Key da equipe (Simple Token) <span class="optional">GPS / sensores</span></label>
+                    <label for="teamApiKey">API Key da equipe (Simple Token) <span class="optional">GPS / sensores — opcional no celular se a escrita estiver no Netlify</span></label>
                     <input type="text" id="teamApiKey" placeholder="~40 chars hex — User Account → Current Team Details (nao Project Key)" autocomplete="off" spellcheck="false" />
+                    <p class="modal-hint modal-hint-sm">Escrita (shadow/c2d): no github.io pode usar <code>NRF_TEAM_WRITE_TOKEN</code> no Netlify sem colar Simple Token aqui. Leitura de GPS/msgs ainda pode precisar da chave no aparelho.</p>
                 </div>
                 <div class="form-group">
                     <label for="orgSlug">Organization slug</label>
@@ -446,6 +470,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=27"></script>
 </body>
 </html>
