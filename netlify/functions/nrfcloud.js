@@ -398,11 +398,16 @@ export async function handler(event) {
     };
   }
 
-  let path = (event.path || '').replace('/.netlify/functions/nrfcloud', '') || '/';
+  // Netlify 200-rewrites often keep the original path (/api/...), while direct
+  // invokes use /.netlify/functions/nrfcloud/... — normalize both.
+  let path = (event.path || '')
+    .replace(/^\/\.netlify\/functions\/nrfcloud/, '')
+    .replace(/^\/api(?=\/|$)/, '') || '/';
   if (!path.startsWith('/')) path = '/' + path;
-  const query = event.queryStringParameters
-    ? '?' + new URLSearchParams(event.queryStringParameters).toString()
-    : '';
+  // {} is truthy — avoid bare "?" which broke Unmapped diagnostics and upstream URLs
+  const qsObj = event.queryStringParameters;
+  const qsStr = qsObj && typeof qsObj === 'object' ? new URLSearchParams(qsObj).toString() : '';
+  const query = qsStr ? `?${qsStr}` : '';
 
   const rawH = event.headers || {};
   const org = (rawH['x-memfault-org'] || rawH['X-Memfault-Org'] || rawH['x-org-slug'] || DEFAULT_ORG).toString().trim() || DEFAULT_ORG;

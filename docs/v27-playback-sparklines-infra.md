@@ -71,3 +71,7 @@ npm run serve
 # http://localhost:3001/?v=27
 # /health → writeTokenConfigured
 ```
+
+## v28 note (2026-09-24)
+
+GitHub Pages was on v27 while **Netlify stayed on ~v11** (no auto-deploy). Symptom: Pages UI new, but `/.netlify/functions/nrfcloud/health` → Unmapped, `alerts` → 404. Fix: Trigger Deploy on Netlify for `main`, then verify health returns `{ok:true}`.

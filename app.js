@@ -1,4 +1,4 @@
-/* Thingy:91X Dashboard v27 — playback, sparklines, Netlify write token, alerts API
+/* Thingy:91X Dashboard v28 — Netlify path/query fix + harden playback; redeploy Netlify
  * Dual proxy (Memfault + nRF Cloud):
  *  GET  /devices?pageLimit=100     -> Memfault .../devices
  *  GET  /devices/{id}              -> Memfault device + attributes + nRF FetchDevice(state)
@@ -224,7 +224,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=27#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=28#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -2428,9 +2428,10 @@ function applyTrailPoints(points) {
         } catch { /* bounds invalid */ }
     }
     // Refresh autonomia / resumo / alertas that depend on trail
-    updateSituacaoInteligente({ trailPts: deduped });
-    updateSparklines(deduped);
-    syncPlaybackUiFromTrail();
+    // Sparklines/playback must never abort the poll loop
+    try { updateSituacaoInteligente({ trailPts: deduped }); } catch (e) { console.warn('situacao', e); }
+    try { updateSparklines(deduped); } catch (e) { console.warn('sparklines', e); }
+    try { syncPlaybackUiFromTrail(); } catch (e) { console.warn('playback', e); }
     return deduped;
 }
 function applyPositionFromPoint(pt, srcLabel) {
@@ -2867,10 +2868,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=27', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=28', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v27';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v27').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v28';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v28').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

@@ -5,9 +5,11 @@
 [functions]
   node_bundler = "esbuild"
 
-# Optional cron (Netlify Pro / enabled schedules). Without plan, on-demand GET /alerts still works.
-[functions."alerts-schedule"]
-  schedule = "*/15 * * * *"
+# Scheduled alerts need Netlify Pro (or schedules enabled). Leave DISABLED by default
+# so free-tier / linked Git deploys always succeed. Enable manually in Netlify UI or
+# uncomment below when the plan supports it:
+# [functions."alerts-schedule"]
+#   schedule = "*/15 * * * *"
 
 [[headers]]
   for = "/manifest.json"
