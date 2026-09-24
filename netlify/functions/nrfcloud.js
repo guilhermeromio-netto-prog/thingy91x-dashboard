@@ -453,20 +453,46 @@ export async function handler(event) {
       });
     }
     let out = data;
+    let statusCode = res.status;
     if (res.ok && typeof data === 'object' && data !== null) {
       if (mapped.normalize === 'list') out = normalizeList(data);
       else if (mapped.normalize === 'device' && mapped.deviceId) {
         out = await enrichDevice(auth, nrfAuth, org, project, mapped.deviceId, data);
       }
     }
+    // nRF Cloud PATCH /state and c2d often return 204 No Content — never forward bare 204 to SPA.
+    if (res.ok && (mapped.kind === 'nrf-state' || mapped.kind === 'nrf-c2d')) {
+      const empty =
+        statusCode === 204 ||
+        out == null ||
+        out === '' ||
+        (typeof out === 'string' && !out.trim());
+      if (empty) {
+        statusCode = 200;
+        let desiredEcho = undefined;
+        try {
+          if (typeof body === 'string' && body.trim()) desiredEcho = JSON.parse(body);
+        } catch { /* ignore */ }
+        out = {
+          ok: true,
+          kind: mapped.kind,
+          deviceId: mapped.deviceId,
+          ...(desiredEcho != null ? { desired: desiredEcho } : {}),
+        };
+      }
+    }
+    if (statusCode === 204) {
+      statusCode = 200;
+      if (out == null || out === '') out = { ok: true, empty: true };
+    }
     return {
-      statusCode: res.status,
+      statusCode,
       headers: {
         'Content-Type': 'application/json',
         ...corsHeaders(event),
         'X-Proxy-Upstream': url,
       },
-      body: typeof out === 'string' ? JSON.stringify({ raw: out }) : JSON.stringify(out),
+      body: typeof out === 'string' ? JSON.stringify({ raw: out }) : JSON.stringify(out == null ? { ok: true, empty: true } : out),
     };
   } catch (err) {
     return json(502, { error: 'Bad gateway', detail: err.message });

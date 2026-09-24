@@ -953,6 +953,30 @@ app.use('/api', async (req, res) => {
 
     let out = data;
     let statusOut = response.status;
+
+    // nRF Cloud PATCH /state and c2d often return 204 No Content. Express strips body on 204;
+    // never forward bare 204 to the SPA — always return JSON 200 for write kinds.
+    if (response.ok && (mapped.kind === 'nrf-state' || mapped.kind === 'nrf-c2d')) {
+      const empty =
+        statusOut === 204 ||
+        out == null ||
+        out === '' ||
+        (typeof out === 'string' && !out.trim());
+      if (empty) {
+        statusOut = 200;
+        let desiredEcho = undefined;
+        try {
+          if (typeof body === 'string' && body.trim()) desiredEcho = JSON.parse(body);
+        } catch { /* ignore */ }
+        out = {
+          ok: true,
+          kind: mapped.kind,
+          deviceId: mapped.deviceId,
+          ...(desiredEcho != null ? { desired: desiredEcho } : {}),
+        };
+      }
+    }
+
     if (response.ok && contentType.includes('application/json')) {
       if (mapped.normalize === 'list') out = normalizeList(data);
       else if (mapped.normalize === 'device' && mapped.deviceId) {
@@ -996,9 +1020,14 @@ app.use('/api', async (req, res) => {
     res.set('X-Proxy-Upstream', targetUrl);
     res.set('X-Proxy-Org', org);
     res.set('X-Proxy-Project', project);
+    // Never emit HTTP 204 with a JSON body to the browser (Express strips it).
+    if (statusOut === 204) {
+      statusOut = 200;
+      if (out == null || out === '') out = { ok: true, empty: true };
+    }
     res.status(statusOut);
-    if (contentType.includes('application/json') || typeof out === 'object') {
-      res.json(out);
+    if (contentType.includes('application/json') || typeof out === 'object' || out == null) {
+      res.json(out == null ? { ok: true, empty: true } : out);
     } else {
       res.send(out);
     }

@@ -1000,7 +1000,11 @@ async function nrfFetch(path, options = {}) {
     const res = await fetch(`${NRF_CLOUD_BASE}${path}`, { ...options, headers });
     const latency = Date.now() - t0;
     if (!res.ok) {
-        const eb = await res.json().catch(() => ({}));
+        const errText = await res.text().catch(() => '');
+        let eb = {};
+        if (errText && errText.trim()) {
+            try { eb = JSON.parse(errText); } catch { eb = { message: errText.slice(0, 200) }; }
+        }
         const errCode = typeof eb.error === 'string' ? eb.error : '';
         const raw = eb.message ?? eb.error ?? eb.detail ?? eb.feature ?? eb.title ?? null;
         let msg;
@@ -1019,7 +1023,16 @@ async function nrfFetch(path, options = {}) {
         log('err', `✕ ${path} [${res.status}] ${msg}`, `${latency}ms`);
         throw new Error(`HTTP ${res.status}: ${msg}`);
     }
-    const data = await res.json(); logCount.api++;
+    // nRF Cloud PATCH /state often returns 204 No Content (empty body). Never call res.json() on empty.
+    const text = await res.text();
+    let data;
+    if (text && text.trim().length > 0) {
+        try { data = JSON.parse(text); }
+        catch { data = { ok: true, raw: text.slice(0, 200) }; }
+    } else {
+        data = { ok: true, empty: true, status: res.status };
+    }
+    logCount.api++;
     return { data, latency };
 }
 async function getDevices() { const { data } = await nrfFetch('/devices?pageLimit=100'); return data.items || []; }
@@ -2485,7 +2498,14 @@ elements.sendDesired?.addEventListener('click', async () => {
         log('ok', 'Desired enviado (shadow PATCH)', JSON.stringify(sent));
         fetchAndUpdate();
     } catch (e) {
-        log('err', `Desired falhou: ${e.message}`, 'Se 401/403: cole Simple Token (API Key da equipe) na engrenagem — OAT só lê.');
+        const m = String(e.message || e);
+        let hint = 'Se 401/403: cole Simple Token (API Key da equipe) na engrenagem — OAT só lê.';
+        if (/Unexpected end of JSON|failed to execute ['"]json['"]/i.test(m)) {
+            hint = 'Resposta vazia do proxy/nuvem (ex.: 204). Atualize para v26+; se persistir, confira proxy/Netlify.';
+        } else if (/401|403/.test(m)) {
+            hint = 'Auth: cole Simple Token (API Key da equipe) na engrenagem — OAT só lê.';
+        }
+        log('err', `Desired falhou: ${m}`, hint);
     }
 });
 elements.sendPing?.addEventListener('click', async () => {
