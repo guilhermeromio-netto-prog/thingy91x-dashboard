@@ -929,3 +929,11 @@ body.has-auth-banner .app { padding-bottom: 72px; }
   .playback-bar { padding: 8px; }
   .playback-chip { font-size: 11px; max-width: 100%; white-space: normal; }
 }
+
+/* v30: explains an empty map (no team key / no fixes) */
+.map-empty-hint {
+    position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    z-index: 800; max-width: 88%; padding: 8px 12px; border-radius: 8px;
+    background: rgba(255, 255, 255, 0.95); color: #2d3436; font-size: 13px; line-height: 1.35;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); border-left: 4px solid #E20074; pointer-events: none; text-align: center;
+}

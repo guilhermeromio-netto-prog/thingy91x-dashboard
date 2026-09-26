@@ -511,6 +511,9 @@ function resolveAuth(req) {
 function envWriteToken() {
   return (process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
 }
+function envReadToken() {
+  return (process.env.NRF_TEAM_READ_TOKEN || process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
+}
 
 /** Simple Token (team API key) for ListMessages / location / FetchDevice — not OAT.
  *  Writes (shadow/c2d): prefer NRF_TEAM_WRITE_TOKEN env (parity with Netlify). */
@@ -533,6 +536,8 @@ function resolveNrfAuth(req, memfaultAuth, { forWrite = false } = {}) {
     }
     return `Bearer ${team}`;
   }
+  const envRead = envReadToken();
+  if (envRead) return `Bearer ${envRead}`;
   if (!_loggedTeamKey) {
     console.log('[Proxy] X-Nrf-Team-Key missing — msgs will use Memfault auth (likely 401)');
     _loggedTeamKey = true;
@@ -1070,6 +1075,7 @@ app.get('/health', (req, res) =>
     org: DEFAULT_ORG,
     project: DEFAULT_PROJECT,
     writeTokenConfigured: !!envWriteToken(),
+    readTokenConfigured: !!envReadToken(),
     telemetry: ['messages', 'location/history', 'devices+attributes', 'nrf-includeState', 'serial', 'shadow-PATCH', 'c2d'],
   })
 );

@@ -1,4 +1,4 @@
-/* Thingy:91X Dashboard v29 — activity-based online (CoAP-safe); redeploy Netlify
+/* Thingy:91X Dashboard v30 — location diagnostics (team key / empty history) + newest-first trail; v29 CoAP-safe presence
  * Dual proxy (Memfault + nRF Cloud):
  *  GET  /devices?pageLimit=100     -> Memfault .../devices
  *  GET  /devices/{id}              -> Memfault device + attributes + nRF FetchDevice(state)
@@ -54,6 +54,8 @@ function resolvePollMs() {
 const POLL_MS = resolvePollMs();
 let lastConnected = null, lastSeenTs = null, lastBatteryPct = null;
 let lastGpsFix = null; // { lat, lon, at }
+/** v30: why there is no position — msgs/hist: 'ok' | 'auth' | 'err' | null; histCount = pts from cloud. */
+let cloudLocState = { msgs: null, hist: null, histCount: 0, hours: 168 };
 let lastBatteryAt = null;
 let lastIntelAlerts = [];
 /** Thresholds for remote intelligence (v25) — tunable constants. */
@@ -231,7 +233,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=29#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=30#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -1225,6 +1227,9 @@ async function nrfFetch(path, options = {}) {
         if (/401|403/.test(String(res.status))) {
             if (errCode === 'Missing Authorization' || /Missing Authorization/i.test(String(msg))) {
                 msg = 'Nenhuma chave enviada — abra Configurar e salve.';
+            } else if (eb.needsTeamKey || eb.code === 40100 || /^\/(messages|location)/.test(path)) {
+                // Memfault key works for /devices; nRF Cloud REST (msgs/location) needs the team API key
+                msg = 'nRF Cloud recusou (40100) — falta a API Key da equipe (Simple Token) na engrenagem.';
             } else {
                 msg = 'Chave rejeitada — confira User API Key/OAT e e-mail (Basic) ou OAT sem e-mail.';
             }
@@ -1376,7 +1381,8 @@ async function getLocationHistory(id, hours = 24) {
     const end = new Date().toISOString(), start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     let all = [], token = null, pages = 0;
     do {
-        const p = { deviceId: id, start, end, pageLimit: '100', pageSort: 'asc' };
+        // v30: newest first so the latest fixes are never cut by the 10-page cap (merge sorts by time)
+        const p = { deviceId: id, start, end, pageLimit: '100', pageSort: 'desc' };
         if (token) p.pageNextToken = token;
         const { data } = await nrfFetch(`/location/history?${new URLSearchParams(p).toString()}`);
         const items = Array.isArray(data) ? data : (data?.items || data?.data || []);
@@ -2021,6 +2027,7 @@ function updateMap(lat, lon, acc, opts = {}) {
     if (!map || !marker) return;
     const appendTrail = !!opts.appendTrail;
     marker.setLatLng([lat, lon]); marker.setOpacity(1);
+    setMapHint(null);
     if (acc != null && Number.isFinite(Number(acc))) {
         if (accuracyCircle) map.removeLayer(accuracyCircle);
         accuracyCircle = L.circle([lat, lon], { radius: Number(acc), color: '#0984e3', fillOpacity: 0.1, weight: 1 }).addTo(map);
@@ -2698,7 +2705,8 @@ async function fetchAndUpdate(opts = {}) {
         if (!config.deviceId) throw new Error('Sem dispositivos na conta');
         const [{ device, latency }, messages, serial] = await Promise.all([
             getDevice(config.deviceId),
-            getMessages(config.deviceId, 50).catch(e => {
+            getMessages(config.deviceId, 50).then(m => { cloudLocState.msgs = 'ok'; return m; }).catch(e => {
+                cloudLocState.msgs = /HTTP (401|403)/.test(e.message) ? 'auth' : 'err';
                 log('warn', 'Msgs falharam — tentando overlay serial', e.message);
                 return [];
             }),
@@ -2757,7 +2765,9 @@ async function fetchAndUpdate(opts = {}) {
             if (fallback && applyPositionFromPoint(fallback, fallback.serviceType || fallback.src || 'trilha')) {
                 // position shown from history/local
             } else if (!healthy) {
-                setText(elements.gpsCoords, (location.hostname.includes('github.io') || location.hostname.includes('netlify')) ? 'Sem fix — configure as chaves na engrenagem (cloud). USB só no Mac.' : 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
+                const onCloud = location.hostname.includes('github.io') || location.hostname.includes('netlify');
+                setText(elements.gpsCoords, onCloud ? noPositionReason() : 'Sem fix — conecte o USB ou aguarde scan Wi‑Fi/célula');
+                if (onCloud) setMapHint(noPositionReason());
             } else if (src === 'cloud_pending' || /loc_cloud|pending/i.test(ser?.rawNotes || '')) {
                 setText(elements.gpsCoords, 'Sem fix — pedido Wi‑Fi/célula na nuvem (ainda sem coordenadas)');
             } else if (aps >= 2) {
@@ -2806,6 +2816,33 @@ async function fetchAndUpdate(opts = {}) {
         }
     }
 }
+/** v30: overlay on the map explaining why there is no marker (null = hide). */
+function setMapHint(text) {
+    const host = document.getElementById('map');
+    if (!host) return;
+    let el = document.getElementById('mapEmptyHint');
+    if (!text) { if (el) el.style.display = 'none'; return; }
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'mapEmptyHint';
+        el.className = 'map-empty-hint';
+        host.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = '';
+}
+/** v30: human reason for an empty map (Pages / cloud-only). */
+function noPositionReason() {
+    const st = cloudLocState;
+    if (st.msgs === 'auth' || st.hist === 'auth') {
+        return 'Sem posição — nRF Cloud recusou a leitura de GPS/trilha (401): cole a API Key da equipe (Simple Token) na engrenagem.';
+    }
+    if (st.hist === 'ok' && st.histCount === 0) {
+        return `Sem posição — nenhum fix (GNSS/Wi‑Fi/célula) na nuvem nas últimas ${st.hours}h. Leve o Thingy para céu aberto ou aguarde o próximo envio.`;
+    }
+    if (st.msgs === 'err' || st.hist === 'err') return 'Sem posição — falha ao consultar a nuvem (tente de novo em instantes).';
+    return 'Sem fix — configure as chaves na engrenagem (cloud). USB só no Mac.';
+}
 async function loadTrail(opts = {}) {
     if (!config.deviceId || !trailEnabled) {
         updateTrailPointsUI(lastTrail.length, trailDistanceKm(lastTrail));
@@ -2820,9 +2857,11 @@ async function loadTrail(opts = {}) {
         if (!quiet) log('info', `Trilha ${hours}h…`);
         cloudItems = await getLocationHistory(config.deviceId, hours);
         cloudOk = true;
+        cloudLocState.hist = 'ok';
         trailFailLogged = false;
     } catch (e) {
         cloudErr = e;
+        cloudLocState.hist = /HTTP (401|403)/.test(e.message) ? 'auth' : 'err';
         if (!trailFailLogged) {
             trailFailLogged = true;
             const needsTeam = /401|403/.test(e.message);
@@ -2834,6 +2873,8 @@ async function loadTrail(opts = {}) {
         }
     }
     const cloudPts = (cloudItems || []).map(normalizeLocItem).filter(Boolean);
+    cloudLocState.histCount = cloudPts.length;
+    cloudLocState.hours = hours;
     // Seed local store from cloud (coords only — don't wipe rich local snapshots)
     for (const p of cloudPts) {
         accumulateLocalPoint({ ...p, src: p.src || 'cloud' });
@@ -2855,6 +2896,13 @@ async function loadTrail(opts = {}) {
         const gpsEl = elements.gpsCoords?.textContent || '';
         const noFix = !gpsEl || gpsEl === '—' || /Sem fix/i.test(gpsEl);
         if (noFix) applyPositionFromPoint(last, last.serviceType || last._src || 'trilha');
+    } else {
+        // v30: explain precisely why the map is empty (team key missing vs. no fixes in cloud)
+        const gpsEl = elements.gpsCoords?.textContent || '';
+        if (!gpsEl || gpsEl === '—' || /Sem fix|Sem posição/i.test(gpsEl)) {
+            setText(elements.gpsCoords, noPositionReason());
+            setMapHint(noPositionReason());
+        }
     }
     // Keep geofence + situação in sync with trail-derived position
     try {
@@ -3075,10 +3123,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=29', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=30', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v29';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v29').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v30';
+        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v30').map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }

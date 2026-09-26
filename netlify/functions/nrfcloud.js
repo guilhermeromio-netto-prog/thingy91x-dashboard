@@ -59,6 +59,11 @@ function envWriteToken() {
   return (process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
 }
 
+/** Read token for nRF Cloud REST (ListMessages, location history, FetchDevice). */
+function envReadToken() {
+  return (process.env.NRF_TEAM_READ_TOKEN || process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^(Bearer)\s+/i, '');
+}
+
 /** nRF Cloud auth: for writes prefer Netlify env NRF_TEAM_WRITE_TOKEN, else client X-Nrf-Team-Key. */
 function resolveNrfAuth(rawH, memfaultAuth, { forWrite = false } = {}) {
   const team = (rawH['x-nrf-team-key'] || rawH['X-Nrf-Team-Key'] || '').trim().replace(/^(Bearer)\s+/i, '');
@@ -68,12 +73,19 @@ function resolveNrfAuth(rawH, memfaultAuth, { forWrite = false } = {}) {
     if (team) return `Bearer ${team}`;
     return memfaultAuth;
   }
+  // Reads: client team key → Netlify env read token → Memfault auth (nRF REST usually rejects it: 401 40100)
   if (team) return `Bearer ${team}`;
+  const envRead = envReadToken();
+  if (envRead) return `Bearer ${envRead}`;
   return memfaultAuth;
 }
 
 function writeTokenConfigured() {
   return !!envWriteToken();
+}
+
+function readTokenConfigured() {
+  return !!envReadToken();
 }
 
 function projectBase(org, project) {
@@ -428,6 +440,7 @@ export async function handler(event) {
       ok: true,
       service: 'nrfcloud',
       writeTokenConfigured: writeTokenConfigured(),
+      readTokenConfigured: readTokenConfigured(),
       ts: new Date().toISOString(),
     }, {}, event);
   }
@@ -475,7 +488,16 @@ export async function handler(event) {
           ...corsHeaders(event),
           'X-Proxy-Upstream': `${mapped.host}${mapped.path}`,
         },
-        body: typeof primary.data === 'string' ? JSON.stringify({ raw: primary.data }) : JSON.stringify(primary.data),
+        body: JSON.stringify(
+          (primary.res.status === 401 || primary.res.status === 403)
+            ? {
+              ...(typeof primary.data === 'object' && primary.data ? primary.data : { raw: primary.data }),
+              needsTeamKey: true,
+              detail: 'Histórico de localização do nRF Cloud exige a API Key da equipe (Simple Token): X-Nrf-Team-Key ou NRF_TEAM_READ_TOKEN no Netlify.',
+              readTokenConfigured: readTokenConfigured(),
+            }
+            : (typeof primary.data === 'string' ? { raw: primary.data } : primary.data)
+        ),
       };
     }
 
