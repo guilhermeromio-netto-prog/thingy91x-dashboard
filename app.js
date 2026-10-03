@@ -1,4 +1,4 @@
-/* Thingy:91X Dashboard v32 — UMA fonte de presença (presence-core.js: last_seen + mensagens + localização + shadow $meta);
+/* Thingy:91X Dashboard v33 — UMA fonte de presença (presence-core.js: last_seen + mensagens + localização + shadow $meta);
  * v31 evidência só da nuvem; v30 diagnóstico de localização; v29 presença CoAP-safe
  * Dual proxy (Memfault + nRF Cloud):
  *  GET  /devices?pageLimit=100     -> Memfault .../devices
@@ -42,7 +42,7 @@ let config = {
     projectSlug: localStorage.getItem('nrf_project_slug') || 'nrf-project',
     deviceId: localStorage.getItem('nrf_device_id') || DEVICE_DEFAULT
 };
-let map, marker, accuracyCircle = null, trailLine = null, trailMarkersLayer = null, trailEnabled = true;
+let map, marker, accuracyCircle = null, trailMarkersLayer = null, trailEnabled = true;
 let fleetMarkers = [];
 let pollInterval = null;
 function resolvePollMs() {
@@ -94,7 +94,7 @@ const TRAIL_FULL_REFRESH_MS = 10 * 60 * 1000;
 const APP_HISTORY_MS = 5 * 60 * 1000;     // BATTERY/TEMP/HUMID/AIR_PRESS por appId
 const TZ = 'America/Sao_Paulo';
 let deviceList = [], lastDeviceRaw = null, lastMessages = [], lastTrail = [], lastSerial = null;
-let trailFailLogged = false, lastTrailFitCount = 0;
+let trailFailLogged = false, lastTrailFitCount = 0, lastTrailAll = [];
 let playbackGhost = null;
 let playback = { playing: false, speed: 1, index: 0, timer: null };
 let lastServerAlerts = [];
@@ -257,7 +257,7 @@ function buildPairingUrl() {
         projectSlug: config.projectSlug || 'nrf-project',
         deviceId: config.deviceId || '',
     };
-    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=32#cfg=';
+    const base = 'https://guilhermeromio-netto-prog.github.io/thingy91x-dashboard/?v=33#cfg=';
     return base + b64urlEncode(JSON.stringify(payload));
 }
 async function copyPairingLink() {
@@ -2077,10 +2077,10 @@ function switchDevice(id) {
     config.deviceId = id; localStorage.setItem('nrf_device_id', id);
     applyAliasToHero(id);
     if (elements.deviceSelect) elements.deviceSelect.value = id;
-    lastConnected = null; lastTrail = []; lastTrailFitCount = 0; trailFailLogged = false;
+    lastConnected = null; lastTrail = []; lastTrailAll = []; lastTrailFitCount = 0; trailFailLogged = false;
     lastCloudLocs = []; lastMessages = []; lastMemfaultSeen = null; lastParsed = null; lastFromMsg = null; lastGpsFix = null; lastPresence = null;
     trailCache = { key: null, fullAt: 0, pts: [], merged: [] }; lastTrailFetchAt = 0; appMsgCache.at = 0;
-    clearTrailMarkers();
+    clearTrailMarkers(); routeFitPending = true; routeSig = null; clearRouteLayers();
     log('info', `Trocado para ${id}`); fetchAndUpdate(); loadTrail();
 }
 
@@ -2088,10 +2088,9 @@ function switchDevice(id) {
 function initMap() {
     if (map) return;
     map = L.map('map').setView([-23.5505, -46.6333], 4);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(map);
     marker = L.marker([0, 0]).addTo(map); marker.setOpacity(0);
-    trailLine = L.polyline([], { color: '#0984e3', weight: 3, opacity: 0.7 }).addTo(map);
     trailMarkersLayer = L.layerGroup().addTo(map);
+    initRouteLayer();
     restoreGeofence(); log('info', 'Mapa pronto');
 }
 /** Move marker + accuracy only. Trail polyline is owned by applyTrailPoints. */
@@ -2118,8 +2117,7 @@ function updateMap(lat, lon, acc, opts = {}) {
         });
     }
     if (!opts.skipZoom && map.getZoom() < 12) {
-        const n = trailLine ? trailLine.getLatLngs().length : 0;
-        if (n < 2) map.setView([lat, lon], 15);
+        if (lastTrail.length < 2) map.setView([lat, lon], 15);
     }
 }
 function drawFleetMarkers(fleet) {
@@ -2464,35 +2462,377 @@ function buildTrailPopupHtml(pt, popts = {}) {
 <strong>Status</strong> ${escHtml(status)}<br>
 <strong>Ambiente</strong> ${escHtml(ambiente)}<br>
 <strong>Rede</strong> ${escHtml(rede)}<br>
-<strong>Fonte</strong> ${escHtml(fonte)}
+<strong>Fonte</strong> ${escHtml(fonte)}${popts.kmh != null ? `<br><strong>Velocidade</strong> ${Math.round(popts.kmh)} km/h <em style="opacity:.7">(estimada entre pontos)</em>` : ''}${popts.note ? `<br><em style="opacity:.7">${escHtml(popts.note)}</em>` : ''}
 ${pt.fw ? `<br><strong>FW</strong> ${fw}` : ''}${noteHtml}
 </div>`;
 }
 function clearTrailMarkers() {
     if (trailMarkersLayer) trailMarkersLayer.clearLayers();
 }
-function renderTrailMarkers(points) {
+/** v33: mantido por compatibilidade — os pontos agora são desenhados por refreshRoute() (respeitando os filtros). */
+function renderTrailMarkers() { refreshRoute(); }
+
+/* ---------- v33: rota nas ruas (map matching) + filtros ---------- */
+const ROUTE_FILTERS_KEY = 'thingy_route_filters_v1';
+const ESRI_ATTR = 'Tiles © Esri — Esri, DeLorme, NAVTEQ, TomTom, Intermap, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, METI, and the GIS User Community';
+// CARTO (rastertiles) passou a exigir chave de API ("API KEY REQUIRED" nos tiles) — por isso o claro/escuro são os Canvas cinza da Esri (sem chave, com atribuição).
+const BASEMAPS = {
+    light: { name: 'Claro', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, maxNativeZoom: 16, dark: false, attr: ESRI_ATTR },
+    dark: { name: 'Escuro', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, maxNativeZoom: 16, dark: true, attr: ESRI_ATTR },
+    sat: { name: 'Satélite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, maxNativeZoom: 19, dark: true,
+        attr: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community' },
+    osm: { name: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', subdomains: 'abc', maxZoom: 19, maxNativeZoom: 19, dark: false,
+        attr: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }
+};
+let routeFilters = loadRouteFilters(), routeFiltersTouched = routeFiltersWereSaved();
+let routeMatcher = null, routePrep = null, routeView = null, routeSig = null, routeFitPending = true;
+let routeCanvas = null, routeSvg = null, routeLines = null, routeLive = null, routeArrows = null, routePins = null, baseLayer = null;
+let routeRefreshTimer = null, routeAutoAll = false, routeNodeOf = new WeakMap(), routeLastFollowSig = null;
+
+function routeFiltersWereSaved() { try { return !!localStorage.getItem(ROUTE_FILTERS_KEY); } catch { return false; } }
+function loadRouteFilters() {
+    let raw = {};
+    try { raw = JSON.parse(localStorage.getItem(ROUTE_FILTERS_KEY) || '{}') || {}; } catch { raw = {}; }
+    if (typeof RouteCore === 'undefined') return raw; // route-core.js não carregou: o resto do painel segue funcionando
+    const f = RouteCore.normalizeFilters(raw);
+    f.follow = !!raw.follow;
+    return f;
+}
+function saveRouteFilters() {
+    try { localStorage.setItem(ROUTE_FILTERS_KEY, JSON.stringify(routeFilters)); } catch { /* quota */ }
+}
+function fmtDurMs(ms) {
+    if (!(ms > 0)) return '0 min';
+    const min = Math.round(ms / 60000);
+    if (min < 1) return '<1 min';
+    if (min < 60) return `${min} min`;
+    const h = Math.floor(min / 60), m = min % 60;
+    if (h >= 48) return `${Math.round(h / 24)} d`;
+    return m ? `${h} h ${String(m).padStart(2, '0')} min` : `${h} h`;
+}
+function fmtKmM(m) { const km = m / 1000; return km >= 10 ? `${km.toFixed(0)} km` : km >= 1 ? `${km.toFixed(1)} km` : `${Math.round(m)} m`; }
+
+function setBasemap(name) {
     if (!map) return;
-    if (!trailMarkersLayer) trailMarkersLayer = L.layerGroup().addTo(map);
-    clearTrailMarkers();
-    if (!trailEnabled || !points || !points.length) return;
-    const n = points.length;
-    points.forEach((pt, i) => {
-        if (!pt || pt.lat == null || pt.lon == null) return;
-        const isLatest = i === n - 1;
-        const cm = L.circleMarker([Number(pt.lat), Number(pt.lon)], {
-            radius: isLatest ? 8 : 4,
-            color: isLatest ? '#E20074' : '#0984e3',
-            weight: isLatest ? 2 : 1,
-            fillColor: isLatest ? '#E20074' : '#74b9ff',
-            fillOpacity: isLatest ? 0.95 : 0.75,
-            opacity: 0.9,
+    const b = BASEMAPS[name] || BASEMAPS.light;
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseLayer = L.tileLayer(b.url, { attribution: b.attr, maxZoom: b.maxZoom, maxNativeZoom: b.maxNativeZoom, subdomains: b.subdomains || 'abc' });
+    baseLayer.addTo(map);
+    baseLayer.bringToBack();
+    map.getContainer().classList.toggle('route-dark', !!b.dark);
+}
+function initRouteLayer() {
+    routeCanvas = L.canvas({ padding: 0.4, tolerance: 6 });
+    routeSvg = L.svg({ padding: 0.4 });
+    routeLines = L.layerGroup().addTo(map);
+    routeLive = L.layerGroup().addTo(map);
+    routeArrows = L.layerGroup().addTo(map);
+    routePins = L.layerGroup().addTo(map);
+    setBasemap(routeFilters.base);
+    map.attributionControl.addAttribution('Ajuste às ruas: <a href="https://valhalla1.openstreetmap.de/">Valhalla</a>/<a href="https://project-osrm.org/">OSRM</a> (FOSSGIS) · dados OSM');
+    routeMatcher = RouteCore.createMatcher({ storage: window.localStorage, onUpdate: () => scheduleRouteRefresh() });
+    map.on('moveend zoomend', () => { try { drawRouteArrows(); } catch { /* ignore */ } });
+    map.on('dragstart', () => { if (routeFilters.follow) { routeFilters.follow = false; saveRouteFilters(); syncRouteUi(); } });
+    setInterval(() => { try { refreshRoute({}); } catch { /* ignore */ } }, 30000);
+    syncRouteUi();
+}
+function clearRouteLayers() {
+    [routeLines, routeLive, routeArrows, routePins].forEach(g => g && g.clearLayers());
+    if (trailMarkersLayer) trailMarkersLayer.clearLayers();
+    routeView = null;
+}
+function scheduleRouteRefresh() {
+    if (routeRefreshTimer) return;
+    routeRefreshTimer = setTimeout(() => { routeRefreshTimer = null; try { refreshRoute({}); } catch (e) { console.warn('rota', e); } }, 200);
+}
+function playbackPts() {
+    if (routeView && routeView.points) return routeView.points.filter(p => p.anchor).map(p => p.pt);
+    return lastTrail || [];
+}
+function snappedLatLng(pt) {
+    try {
+        const node = routeNodeOf.get(pt);
+        const sn = node && routeMatcher && routeFilters.snap ? routeMatcher.snap(node) : null;
+        if (sn) return sn;
+    } catch { /* ignore */ }
+    return [Number(pt.lat), Number(pt.lon)];
+}
+function refreshRoute(opts = {}) {
+    if (!map || typeof RouteCore === 'undefined' || !routeLines) return;
+    if (!trailEnabled) { clearRouteLayers(); return; }
+    const pts = lastTrailAll && lastTrailAll.length ? lastTrailAll : (lastTrail || []);
+    const first = pts[0], last = pts[pts.length - 1];
+    const sig = `${pts.length}|${first?.at}|${last?.at}|${last?.lat}`;
+    if (!routePrep || sig !== routeSig) {
+        routeSig = sig;
+        routePrep = RouteCore.prepare(pts, { now: Date.now() });
+        routeNodeOf = new WeakMap();
+        routePrep.segments.forEach(sg => sg.nodes.forEach(n => n.members.forEach(m => routeNodeOf.set(m, n))));
+        if (routeFilters.snap) routeMatcher.update(routePrep.segments);
+    }
+    const now = Date.now();
+    const lookup = routeFilters.snap ? k => routeMatcher.lookup(k) : null;
+    let view = RouteCore.computeView(routePrep, routeFilters, lookup, now);
+    routeAutoAll = false;
+    if (!routeFiltersTouched && routeFilters.period === 'today' && !view.points.length && routePrep.good.length) {
+        view = RouteCore.computeView(routePrep, { ...routeFilters, period: 'all' }, lookup, now);
+        routeAutoAll = true;
+    }
+    routeView = view;
+    drawRoute(view);
+    updateRouteSummary(view);
+    updateRouteBadge(view);
+    syncRouteUi();
+    if (routeFitPending && !routeFilters.follow && fitRoute(true)) routeFitPending = false;
+    if (routeFilters.follow) followDevice();
+    if (opts.trailChanged === false) return;
+    try { syncPlaybackUiFromTrail(); } catch (e) { console.warn('playback', e); }
+}
+function pairPopupHtml(p) {
+    const end = p.b.pt;
+    const note = p.quality === 'direct' ? 'trecho em linha direta (sem ajuste às ruas)' : (p.quality === 'routed' ? 'trecho por rota entre pontos' : (p.estimated ? 'trajeto estimado entre pontos distantes no tempo' : ''));
+    return buildTrailPopupHtml(end, { latest: end === newestPoint(lastTrail), kmh: p.kmh, note });
+}
+function drawRoute(view) {
+    routeLines.clearLayers(); routeLive.clearLayers(); routePins.clearLayers();
+    trailMarkersLayer.clearLayers();
+    const f = routeFilters, base = BASEMAPS[f.base] || BASEMAPS.light;
+    const casing = base.dark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.95)';
+    const pairs = view.pairs;
+    // 1) contornos (embaixo), 2) linhas coloridas (em cima)
+    pairs.forEach(p => {
+        if (!p.geom) return;
+        L.polyline(p.geom, { renderer: routeCanvas, color: casing, weight: 9, opacity: 0.9, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(routeLines);
+    });
+    pairs.forEach(p => {
+        const dash = p.estimated ? '10 8' : null;
+        let line;
+        if (p.geom) {
+            line = L.polyline(p.geom, { renderer: routeCanvas, color: RouteCore.pairColor(p, f.colorBy), weight: 5, opacity: 0.97, lineCap: 'round', lineJoin: 'round', dashArray: dash });
+            line.options.routeQ = p.quality;
+        } else {
+            line = L.polyline([[p.a.lat, p.a.lon], [p.b.lat, p.b.lon]], { renderer: routeCanvas, color: base.dark ? '#cbd5e1' : '#4b5563', weight: 2, opacity: 0.9, dashArray: '4 6', lineCap: 'butt' });
+            line.options.routeQ = 'direct';
+        }
+        line.on('click', e => { L.popup({ maxWidth: 280, className: 'trail-popup-wrap' }).setLatLng(e.latlng).setContent(pairPopupHtml(p)).openOn(map); });
+        line.addTo(routeLines);
+    });
+    // trecho mais recente animado (SVG, tracejado correndo)
+    if (f.animate && pairs.length) {
+        const lastT = pairs[pairs.length - 1].b.t;
+        pairs.filter(p => lastT - p.b.t <= 5 * 60 * 1000).slice(-10).forEach(p => {
+            const g = p.geom || [[p.a.lat, p.a.lon], [p.b.lat, p.b.lon]];
+            L.polyline(g, { renderer: routeSvg, color: '#ffffff', weight: 2.5, opacity: 0.95, className: 'route-live', interactive: false }).addTo(routeLive);
         });
-        cm.bindPopup(buildTrailPopupHtml(pt, { latest: isLatest }), { maxWidth: 280, className: 'trail-popup-wrap' });
-        cm.on('click', () => { try { cm.openPopup(); } catch { /* ignore */ } });
+    }
+    // início / fim
+    if (pairs.length) {
+        const a = pairs[0].a, b = pairs[pairs.length - 1].b;
+        const pin = (cls, txt, ll, tip) => L.marker(ll, { icon: L.divIcon({ className: `route-pin ${cls}`, html: `<span>${txt}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] }), keyboard: false, zIndexOffset: 400 })
+            .bindTooltip(tip, { direction: 'top', offset: [0, -10] }).addTo(routePins);
+        pin('start', 'I', [a.lat, a.lon], `Início · ${fmtDateTime(a.t, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`);
+        pin('end', 'F', [b.lat, b.lon], `Fim · ${fmtDateTime(b.t, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`);
+    }
+    // paradas
+    view.stops.forEach(s => {
+        const hh = t => fmtTime(t, { hour: '2-digit', minute: '2-digit' });
+        const html = `<div class="trail-popup"><strong>Parada</strong> ${escHtml(fmtDurMs(s.durMs))}${s.ongoing ? ' (em andamento)' : ''}<br><strong>Das</strong> ${hh(s.startT)} <strong>às</strong> ${hh(s.endT)}<br><strong>Fixes</strong> ${s.count}<br><strong>Local</strong> ${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}</div>`;
+        L.marker([s.lat, s.lon], { icon: L.divIcon({ className: 'route-pin stop', html: '<span>P</span>', iconSize: [24, 24], iconAnchor: [12, 12] }), keyboard: false, zIndexOffset: 300 })
+            .bindTooltip(`Parada · ${fmtDurMs(s.durMs)}`, { direction: 'top', offset: [0, -10] })
+            .bindPopup(html, { maxWidth: 260, className: 'trail-popup-wrap' }).addTo(routePins);
+    });
+    // pontos brutos (opcional) + descartados
+    const newest = newestPoint(lastTrail);
+    if (f.raw) {
+        const srcColor = { gnss: '#0984e3', wifi: '#00b894', cell: '#e17055' };
+        view.points.forEach(vp => {
+            if (vp.pt === newest || !vp.anchor) return;
+            const cls = RouteCore.sourceClass(vp.pt);
+            const cm = L.circleMarker([Number(vp.pt.lat), Number(vp.pt.lon)], { renderer: routeCanvas, radius: vp.stopped ? 3 : 4, color: '#fff', weight: 1, fillColor: srcColor[cls], fillOpacity: 0.9 });
+            cm.bindPopup(() => buildTrailPopupHtml(vp.pt, { latest: false, kmh: vp.kmh }), { maxWidth: 280, className: 'trail-popup-wrap' });
+            trailMarkersLayer.addLayer(cm);
+        });
+        view.rejected.forEach(r => {
+            if (!r.pt || r.pt.lat == null) return;
+            const why = r.reason === 'acuracia' ? `acurácia ruim (${Math.round(r.unc)} m)` : r.reason === 'salto' ? 'salto implausível' : 'inválido';
+            const cm = L.circleMarker([Number(r.pt.lat), Number(r.pt.lon)], { renderer: routeCanvas, radius: 4, color: '#94a3b8', weight: 1, fillOpacity: 0, dashArray: '2 2' });
+            cm.bindTooltip(`Descartado da linha: ${why}`);
+            trailMarkersLayer.addLayer(cm);
+        });
+    }
+    // ponto mais recente: sempre visível, com o popup completo (presença única)
+    if (newest) {
+        const cm = L.circleMarker([Number(newest.lat), Number(newest.lon)], { radius: 8, color: '#E20074', weight: 2, fillColor: '#E20074', fillOpacity: 0.95, opacity: 0.9 });
+        cm.bindPopup(() => buildTrailPopupHtml(newest, { latest: true }), { maxWidth: 280, className: 'trail-popup-wrap' });
         trailMarkersLayer.addLayer(cm);
+    }
+    drawRouteArrows();
+    drawRouteLegend();
+}
+function drawRouteArrows() {
+    if (!routeArrows || !map) return;
+    routeArrows.clearLayers();
+    if (!routeFilters.arrows || !routeView) return;
+    const bounds = map.getBounds().pad(0.1), taken = [];
+    routeView.pairs.forEach(p => {
+        const g = p.geom || [[p.a.lat, p.a.lon], [p.b.lat, p.b.lon]];
+        if (p.lenM < 60) return;
+        let i = Math.max(0, Math.floor((g.length - 1) / 2));
+        if (g.length === 2) i = 0;
+        const from = g[i], to = g[Math.min(i + 1, g.length - 1)];
+        const at = g.length === 2 ? [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2] : from;
+        if (!bounds.contains(at)) return;
+        const pt = map.latLngToContainerPoint(at);
+        if (taken.some(q => Math.abs(q.x - pt.x) < 70 && Math.abs(q.y - pt.y) < 70)) return;
+        taken.push(pt);
+        const brg = RouteCore.bearing(from[0], from[1], to[0], to[1]);
+        const color = p.geom ? '#ffffff' : '#e5e7eb';
+        L.marker(at, { interactive: false, keyboard: false, icon: L.divIcon({ className: 'route-arrow', iconSize: [14, 14], iconAnchor: [7, 7],
+            html: `<svg width="14" height="14" viewBox="0 0 14 14" style="transform:rotate(${brg.toFixed(0)}deg)"><path d="M7 1 L12.5 12.5 L7 9.6 L1.5 12.5 Z" fill="${color}" stroke="#111827" stroke-width="1.2" stroke-linejoin="round"/></svg>` }) }).addTo(routeArrows);
     });
 }
+function drawRouteLegend() {
+    const el = $('routeLegend'); if (!el) return;
+    const grad = (ramp, max) => `linear-gradient(90deg, ${ramp.map(([v, c]) => `${c} ${(v / max * 100).toFixed(0)}%`).join(', ')})`;
+    const by = routeFilters.colorBy;
+    let bar = '', lbl = '';
+    if (by === 'hour') { bar = grad(RouteCore.HOUR_RAMP, 24); lbl = '<span>0 h</span><span>12 h</span><span>24 h</span>'; }
+    else if (by === 'battery') { bar = grad(RouteCore.BAT_RAMP, 100); lbl = '<span>0%</span><span>50%</span><span>100%</span>'; }
+    else { bar = grad(RouteCore.SPEED_RAMP, 110); lbl = '<span>0</span><span>55</span><span>110+ km/h</span>'; }
+    el.innerHTML = `<span>Cor:</span><span class="bar" style="background:${bar}"></span>${lbl}<span class="sw"></span>linha direta<span class="sw est"></span>trecho estimado`;
+}
+function updateRouteSummary(view) {
+    const el = $('routeSummary'); if (!el) return;
+    const s = view.stats, f = routeFilters;
+    if (!s.nPoints && !s.nPairs && !view.stops.length) {
+        el.textContent = (lastTrail || []).length ? 'Nenhum ponto neste filtro — amplie o período ou limpe os filtros.' : 'Sem pontos de localização ainda.';
+        return;
+    }
+    const it = (k, v) => `<span class="rs-item"><small>${k}</small>${escHtml(v)}</span>`;
+    const parts = [];
+    if (routeAutoAll) parts.push('<span class="rs-item"><small>Sem pontos hoje —</small>mostrando todo o período carregado</span>');
+    parts.push(it('Distância', s.nPairs ? fmtKmM(s.distM) : '—'));
+    parts.push(it('Em movimento', s.nPairs ? fmtDurMs(s.movingMs) : '—'));
+    parts.push(it('Parado', f.mode === 'move' || (f.vmin != null && f.vmin > 0) ? '—' : `${fmtDurMs(s.stoppedMs)}${s.nStops ? ` (${s.nStops} parada${s.nStops > 1 ? 's' : ''})` : ''}`));
+    parts.push(it('Média', s.avgKmh != null ? `${Math.round(s.avgKmh)} km/h` : '—'));
+    parts.push(it('Máx.', s.maxKmh != null ? `${Math.round(s.maxKmh)} km/h` : '—'));
+    parts.push(it('Pontos', String(s.nPoints)));
+    el.innerHTML = parts.join('');
+    el.title = 'Calculado só com os pontos que passam nos filtros. Velocidade = média entre dois pontos consecutivos (o aparelho não envia velocidade instantânea).';
+}
+function updateRouteBadge(view) {
+    const el = $('routeBadge'); if (!el) return;
+    const q = view.stats.quality, total = q.matched + q.routed + q.direct;
+    const st = routeMatcher ? routeMatcher.status : null;
+    let cls = 'direct', txt = 'Sem trilha', title = '';
+    const svcDown = st && st.services.valhalla === 'down' && st.services.osrm === 'down';
+    if (!routeFilters.snap) { txt = 'Linha direta · ajuste desligado'; title = 'O ajuste às ruas está desligado: os pontos são ligados em linha reta.'; }
+    else if (!total) { txt = view.stats.nPoints ? 'Sem trechos' : 'Sem trilha'; }
+    else if (st && st.state === 'matching' && st.total) { cls = 'busy'; txt = `Ajustando às ruas… ${st.done}/${st.total}`; title = 'Consultando o serviço de mapas (Valhalla/OSM). Os trechos novos aparecem em linha direta até terminar.'; }
+    else if (q.direct === 0 && q.routed === 0) { cls = 'ok'; txt = 'Ajustado às ruas'; title = `${q.matched} trecho(s) seguindo as vias (Valhalla · OpenStreetMap).`; }
+    else if (q.matched === 0 && q.direct === 0 && q.routed > 0) { cls = 'warn'; txt = 'Rota entre pontos (serviço alternativo)'; title = `${q.routed} trecho(s) calculados como rota entre os pontos (OSRM); menos exatos que o ajuste do Valhalla.`; }
+    else if (q.matched === 0 && q.routed === 0) { cls = 'direct'; txt = svcDown ? 'Linha direta · serviço de ruas indisponível' : 'Linha direta'; title = svcDown ? 'Valhalla e OSRM não responderam; tentando de novo em alguns minutos. A linha reta tracejada é só uma aproximação.' : 'Não foi possível ajustar estes trechos às ruas (pontos longe das vias, ruins ou muito espaçados).'; }
+    else { cls = 'warn'; txt = q.matched + q.routed ? 'Parcialmente ajustado às ruas' : 'Linha direta'; title = `${q.matched} ajustado(s), ${q.routed} por rota entre pontos, ${q.direct} em linha direta.`; }
+    el.className = `route-badge ${cls}`; el.textContent = txt; el.title = title;
+}
+function routeBounds() {
+    if (!routeView) return null;
+    const b = L.latLngBounds([]);
+    routeView.pairs.forEach(p => { (p.geom || [[p.a.lat, p.a.lon], [p.b.lat, p.b.lon]]).forEach(g => b.extend(g)); });
+    if (!b.isValid()) routeView.points.forEach(p => b.extend([Number(p.pt.lat), Number(p.pt.lon)]));
+    if (!b.isValid()) routeView.stops.forEach(s => b.extend([s.lat, s.lon]));
+    return b.isValid() ? b : null;
+}
+function fitRoute(auto) {
+    const b = routeBounds();
+    if (!b) return false;
+    try { map.fitBounds(b, { padding: [40, 40], maxZoom: 16 }); return true; } catch { return false; }
+}
+function followDevice() {
+    const n = newestPoint(lastTrail);
+    if (!n || !map) return;
+    const sig = `${n.at}|${n.lat}|${n.lon}`;
+    const first = routeLastFollowSig === null, changed = sig !== routeLastFollowSig;
+    routeLastFollowSig = sig;
+    const ll = [Number(n.lat), Number(n.lon)];
+    const inView = map.getBounds().pad(-0.25).contains(ll);
+    if (!changed && inView) return;
+    // setView com zoom animado é ignorado pelo Leaflet se outra animação de zoom estiver rodando → sem animação
+    if (first && map.getZoom() < 15) map.setView(ll, 16, { animate: false });
+    else map.panTo(ll, { animate: true, duration: 0.4 });
+}
+/** Garante que a trilha carregada cobre o período pedido (24h/7d/30d/90d da nuvem). */
+function ensureTrailCovers(sinceMs) {
+    const sel = elements.trailRange; if (!sel || !isFinite(sinceMs)) return;
+    const needH = (Date.now() - sinceMs) / 3600000;
+    const cur = Number(sel.value);
+    if (cur >= needH) return;
+    const opt = [...sel.options].map(o => Number(o.value)).sort((a, b) => a - b).find(v => v >= needH) || Math.max(...[...sel.options].map(o => Number(o.value)));
+    if (opt && opt !== cur) { sel.value = String(opt); loadTrail({ full: true }); }
+}
+function spLocalInput(ms) { return ms == null ? '' : new Date(ms - 3 * 3600e3).toISOString().slice(0, 16); }
+function parseSpLocal(v) { if (!v) return null; const t = Date.parse(`${v}:00-03:00`); return Number.isFinite(t) ? t : null; }
+function syncRouteUi() {
+    const f = routeFilters, eff = routeAutoAll ? 'all' : f.period;
+    document.querySelectorAll('#rfPeriod .rf-chip').forEach(b => b.classList.toggle('active', b.dataset.period === eff));
+    document.querySelectorAll('#rfMode button').forEach(b => b.classList.toggle('active', b.dataset.mode === f.mode));
+    const set = (id, v) => { const e = $(id); if (e && document.activeElement !== e) { if (e.type === 'checkbox') e.checked = !!v; else e.value = v == null ? '' : v; } };
+    set('rfVmin', f.vmin); set('rfVmax', f.vmax); set('rfGnss', f.gnss); set('rfWifi', f.wifi); set('rfCell', f.cell);
+    set('rfColor', f.colorBy); set('rfBase', f.base); set('rfSnap', f.snap); set('rfRaw', f.raw); set('rfArrows', f.arrows); set('rfAnimate', f.animate); set('rfFollow', f.follow);
+    set('rfFrom', spLocalInput(f.from)); set('rfTo', spLocalInput(f.to));
+    const cu = $('rfCustom'); if (cu) cu.hidden = f.period !== 'custom';
+}
+function onRouteFilterChange(patch, { fit = true, touched = true } = {}) {
+    Object.assign(routeFilters, patch);
+    routeFilters = RouteCore.normalizeFilters({ ...routeFilters, follow: routeFilters.follow });
+    if (touched) routeFiltersTouched = true;
+    saveRouteFilters();
+    if (patch.base) setBasemap(routeFilters.base);
+    if (fit) routeFitPending = true;
+    refreshRoute({});
+}
+function setRoutePeriod(p) {
+    const patch = { period: p };
+    const now = Date.now();
+    if (p === 'yesterday' || p === '7d') ensureTrailCovers(RouteCore.periodWindow({ period: p }, now).t0);
+    if (p === 'all') ensureTrailCovers(now - 7 * 86400e3);
+    if (p === 'live') patch.follow = true;
+    if (p === 'custom') {
+        if (routeFilters.from == null) patch.from = RouteCore.startOfDaySP(now);
+        ensureTrailCovers(patch.from ?? routeFilters.from);
+    }
+    onRouteFilterChange(patch);
+}
+function wireRouteUi() {
+    document.querySelectorAll('#rfPeriod .rf-chip').forEach(b => b.addEventListener('click', () => setRoutePeriod(b.dataset.period)));
+    document.querySelectorAll('#rfMode button').forEach(b => b.addEventListener('click', () => onRouteFilterChange({ mode: b.dataset.mode })));
+    const num = id => { const e = $(id); return e && e.value !== '' ? Number(e.value) : null; };
+    $('rfVmin')?.addEventListener('change', () => onRouteFilterChange({ vmin: num('rfVmin'), vmax: num('rfVmax') }));
+    $('rfVmax')?.addEventListener('change', () => onRouteFilterChange({ vmin: num('rfVmin'), vmax: num('rfVmax') }));
+    [['rfGnss', 'gnss'], ['rfWifi', 'wifi'], ['rfCell', 'cell']].forEach(([id, k]) => $(id)?.addEventListener('change', e => onRouteFilterChange({ [k]: e.target.checked })));
+    $('rfColor')?.addEventListener('change', e => onRouteFilterChange({ colorBy: e.target.value }, { fit: false }));
+    $('rfBase')?.addEventListener('change', e => onRouteFilterChange({ base: e.target.value }, { fit: false }));
+    $('rfRaw')?.addEventListener('change', e => onRouteFilterChange({ raw: e.target.checked }, { fit: false }));
+    $('rfArrows')?.addEventListener('change', e => onRouteFilterChange({ arrows: e.target.checked }, { fit: false }));
+    $('rfAnimate')?.addEventListener('change', e => onRouteFilterChange({ animate: e.target.checked }, { fit: false }));
+    $('rfFollow')?.addEventListener('change', e => { routeLastFollowSig = null; onRouteFilterChange({ follow: e.target.checked }, { fit: false }); });
+    $('rfSnap')?.addEventListener('change', e => {
+        onRouteFilterChange({ snap: e.target.checked }, { fit: false });
+        if (e.target.checked && routePrep && routeMatcher) { routeMatcher.clearFailures(); routeMatcher.update(routePrep.segments); }
+    });
+    const cust = () => { const from = parseSpLocal($('rfFrom')?.value), to = parseSpLocal($('rfTo')?.value); if (from != null) ensureTrailCovers(from); onRouteFilterChange({ period: 'custom', from, to }); };
+    $('rfFrom')?.addEventListener('change', cust); $('rfTo')?.addEventListener('change', cust);
+    $('rfFit')?.addEventListener('click', () => { if (!fitRoute(false)) log('warn', 'Nada para enquadrar neste filtro'); });
+    $('rfReset')?.addEventListener('click', () => {
+        const d = RouteCore.DEFAULT_FILTERS;
+        onRouteFilterChange({ period: d.period, from: null, to: null, vmin: null, vmax: null, mode: 'all', gnss: true, wifi: true, cell: true }, {});
+    });
+    const det = $('routeFilters');
+    try { if (localStorage.getItem('thingy_route_panel_closed') === '1' || (window.innerWidth < 700 && localStorage.getItem('thingy_route_panel_closed') == null)) det.open = false; } catch { /* ignore */ }
+    det?.addEventListener('toggle', () => { try { localStorage.setItem('thingy_route_panel_closed', det.open ? '0' : '1'); } catch { /* ignore */ } });
+    syncRouteUi();
+}
+
 
 /* ---------- Sparklines (SVG, no chart lib) ---------- */
 const SPARK_MIN_PTS = 3;
@@ -2583,7 +2923,7 @@ function formatPlaybackChip(pt, idx, total) {
     return parts.join(' · ');
 }
 function showPlaybackAt(index, { openPopup = false } = {}) {
-    const pts = lastTrail || [];
+    const pts = playbackPts();
     if (!pts.length) {
         stopPlayback();
         if (elements.playbackScrub) { elements.playbackScrub.disabled = true; elements.playbackScrub.max = 0; elements.playbackScrub.value = 0; }
@@ -2611,7 +2951,7 @@ function showPlaybackAt(index, { openPopup = false } = {}) {
     if (pt.lat == null || pt.lon == null) return;
     const g = ensurePlaybackGhost();
     if (!g) return;
-    g.setLatLng([Number(pt.lat), Number(pt.lon)]);
+    g.setLatLng(snappedLatLng(pt)); // v33: o fantasma anda em cima da rua ajustada
     g.setStyle({ opacity: 0.95, fillOpacity: 0.9 });
     g.bindPopup(buildTrailPopupHtml(pt, { latest: i === pts.length - 1 }), { maxWidth: 280, className: 'trail-popup-wrap' });
     if (openPopup) { try { g.openPopup(); } catch { /* ignore */ } }
@@ -2622,14 +2962,14 @@ function stopPlayback() {
     if (elements.playbackPlay) elements.playbackPlay.textContent = '▶';
 }
 function tickPlayback() {
-    const pts = lastTrail || [];
+    const pts = playbackPts();
     if (!pts.length) return stopPlayback();
     let next = playback.index + 1;
     if (next >= pts.length) { stopPlayback(); return; }
     showPlaybackAt(next);
 }
 function togglePlayback() {
-    const pts = lastTrail || [];
+    const pts = playbackPts();
     if (pts.length < 2) {
         if (elements.playbackChip) {
             elements.playbackChip.textContent = pts.length ? 'Precisa de ≥2 pontos' : 'Sem pontos na trilha';
@@ -2647,7 +2987,7 @@ function togglePlayback() {
     playback.timer = setInterval(tickPlayback, ms);
 }
 function syncPlaybackUiFromTrail() {
-    const pts = lastTrail || [];
+    const pts = playbackPts();
     if (!pts.length) {
         stopPlayback();
         showPlaybackAt(0);
@@ -2709,19 +3049,17 @@ function scheduleServerAlerts() {
 }
 
 function applyTrailPoints(points) {
-    const deduped = dedupeConsecutive((points || []).filter(p => p && p.lat != null && p.lon != null));
+    const validPts = (points || []).filter(p => p && p.lat != null && p.lon != null);
+    const deduped = dedupeConsecutive(validPts);
     lastTrail = deduped;
-    const latlngs = deduped.map(p => [Number(p.lat), Number(p.lon)]);
-    if (trailLine) trailLine.setLatLngs(trailEnabled ? latlngs : []);
-    renderTrailMarkers(trailEnabled ? deduped : []);
+    // v33: o motor de rota usa TODOS os fixes (sem o dedupe de 15 m) — senão uma parada de 20 min vira 1 ponto e some a duração
+    lastTrailAll = validPts;
     const km = trailDistanceKm(deduped);
     updateTrailPointsUI(deduped.length, km);
-    if (trailEnabled && map && latlngs.length >= 2 && latlngs.length !== lastTrailFitCount) {
-        try {
-            map.fitBounds(trailLine.getBounds(), { padding: [40, 40], maxZoom: 14 });
-            lastTrailFitCount = latlngs.length;
-        } catch { /* bounds invalid */ }
-    }
+    if (lastTrailFitCount === 0) routeFitPending = true;
+    lastTrailFitCount = deduped.length;
+    // v33: linha ajustada às ruas + filtros + pontos (um único renderizador)
+    try { refreshRoute({ trailChanged: true }); } catch (e) { console.warn('rota', e); }
     // Refresh autonomia / resumo / alertas that depend on trail
     // Sparklines/playback must never abort the poll loop
     try { updateSituacaoInteligente({ trailPts: deduped }); } catch (e) { console.warn('situacao', e); }
@@ -3097,7 +3435,7 @@ async function loadTrail(opts = {}) {
         .map(normalizeLocItem)
         .filter(Boolean)
         .filter(p => !p.at || new Date(p.at).getTime() >= cutoff);
-    let merged = dedupeConsecutive(mergeTrailPoints(cloudPts, localPts));
+    let merged = mergeTrailPoints(cloudPts, localPts); // v33: sem dedupe aqui (applyTrailPoints deduplica só lastTrail; a rota precisa dos fixes parados)
     merged = enrichWithLocalSnapshots(merged, localRaw);
     trailCache.merged = merged;
     applyTrailAndPresence(merged, hours, quiet, { cloudOk, cloudErr });
@@ -3185,10 +3523,11 @@ elements.toggleTrail?.addEventListener('click', () => {
     trailEnabled = !trailEnabled;
     updateTrailPointsUI(lastTrail.length, trailDistanceKm(lastTrail));
     log('info', `Trilha ${trailEnabled ? 'ON' : 'OFF'}`);
-    if (!trailEnabled) { trailLine?.setLatLngs([]); clearTrailMarkers(); lastTrailFitCount = 0; }
-    else { lastTrailFitCount = 0; loadTrail(); }
+    if (!trailEnabled) { clearRouteLayers(); clearTrailMarkers(); lastTrailFitCount = 0; }
+    else { lastTrailFitCount = 0; routeFitPending = true; loadTrail(); }
 });
 elements.trailRange?.addEventListener('change', () => loadTrail({ full: true }));
+wireRouteUi();
 elements.playbackPlay?.addEventListener('click', togglePlayback);
 elements.playbackSpeed?.addEventListener('change', () => {
     playback.speed = Number(elements.playbackSpeed.value || 1) || 1;

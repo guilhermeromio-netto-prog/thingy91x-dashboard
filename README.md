@@ -9,6 +9,8 @@ PT-BR abaixo · English short section at the end.
 
 ## URL pública (GitHub Pages)
 
+**v33:** trilha **ajustada às ruas** + filtros. `route-core.js` (lógica pura, testada em Node) limpa a trilha (jitter < 15 m, acurácia > 150 m, saltos > 250 km/h), divide em segmentos (lacuna > 10 min não une), detecta paradas (> 3 min) e envia lotes de até 80 pontos ao **Valhalla público** (`valhalla1.openstreetmap.de/trace_route`, map_snap, sem chave, CORS liberado) — fallback **OSRM `/route`** por waypoints e, por fim, linha reta tracejada fina. Cache por lote em `localStorage` (`thingy_rm_cache_v1`), 1 chamada a cada ≥ 1,2 s, disjuntor após 3 falhas, Retry-After respeitado. O OSRM `/match` do servidor demo aceita só 10 coordenadas, por isso não é usado. Visual: cor por velocidade/hora/bateria, contorno, setas, trecho recente animado, início/fim, paradas com duração, pontos brutos opcionais, mapa Claro/Escuro/Satélite/OSM (Esri e OSM; os tiles raster da CARTO passaram a exigir chave). Filtros persistidos em `thingy_route_filters_v1` (período, velocidade, só movimento/paradas, fonte, seguir aparelho, enquadrar). Testes: `node tests/route.test.mjs` (em `npm test`), `python3 tests/e2e_route.py [matched|osrm|fallback|filters|live]`.
+
 **v32:** UMA fonte de verdade de presença (`presence-core.js`, usada pelo front, `nrfcloud.js`, `alerts.js` e `proxy.js`). Evidência = o mais recente entre `last_seen` (Memfault), **qualquer mensagem da nuvem** (BATTERY/TEMP/…/GNSS), **location history da nuvem** (GNSS/Wi‑Fi/célula) e `$meta` do shadow. Continua NÃO contando: hora do poll, USB serial do Mac, cache/localStorage. O tooltip do header / "Último dado do aparelho (nuvem)" mostra a fonte. "Posição" usa o ponto mais recente por horário (idade correta). Sem DEVICE/SCELL o app diz "aparelho enviou posição, mas não dados de rede" (sem falso "Aguardando LTE"). Também: fuso America/Sao_Paulo fixo, trilha incremental (1 request por minuto), bateria/ambiente da trilha vindos das mensagens BATTERY/TEMP/HUMID/AIR_PRESS, timeout + 429, SRI no Leaflet, `netlify.toml` bloqueia arquivos locais (serial-telemetry.json etc.) no deploy. Testes: `npm test` e `npm run test:e2e`.
 
 **v31:** presença só com evidência da nuvem (last_seen / mensagens / shadow $meta) — hora do poll, USB serial local, trilha e cache não contam mais como "online"; `connected=true` velho (>1h) não sobrepõe silêncio; strip "Último dado do aparelho (nuvem)" + "Fonte da rede" (nuvem vs USB do Mac).
@@ -93,9 +95,10 @@ UI mapeia `gpsInterval` → `desired.config.sample_interval` (Asset Tracker Temp
 
 ```
 index.html, styles.css, app.js, icon.svg, manifest.json
-service-worker.js          # cache thingy91x-v32
+service-worker.js          # cache thingy91x-v33
 presence-core.js           # presença única (front + functions + proxy)
-tests/                     # presence.test.mjs, functions.test.mjs, e2e_presence.py (playwright)
+route-core.js              # trilha: limpeza, paradas, map matching (Valhalla/OSRM), filtros
+tests/                     # presence/route/functions .test.mjs, route.live.mjs (manual), e2e_presence.py, e2e_route.py (playwright)
 proxy.js                   # :3001 static + /api
 serial_telemetry.py        # UART bridge
 Thingy91X-Dashboard.command

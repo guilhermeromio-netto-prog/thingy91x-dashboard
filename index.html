@@ -20,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=32">
+    <link rel="stylesheet" href="styles.css?v=33">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 </head>
 <body>
@@ -366,6 +366,78 @@
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/><circle cx="12" cy="11" r="3"/></svg>
                         <h2>Localização</h2>
                     </header>
+                    <div class="route-panel" id="routePanel">
+                        <div class="route-top">
+                            <div class="rf-chips" id="rfPeriod" role="group" aria-label="Período">
+                                <button type="button" class="rf-chip" data-period="live" title="Últimos 15 minutos, acompanhando em tempo real">Ao vivo</button>
+                                <button type="button" class="rf-chip" data-period="1h">1 h</button>
+                                <button type="button" class="rf-chip" data-period="today">Hoje</button>
+                                <button type="button" class="rf-chip" data-period="yesterday">Ontem</button>
+                                <button type="button" class="rf-chip" data-period="7d">7 dias</button>
+                                <button type="button" class="rf-chip" data-period="all" title="Tudo que está carregado no período da trilha">Tudo</button>
+                                <button type="button" class="rf-chip" data-period="custom">Personalizado</button>
+                            </div>
+                            <span class="route-badge" id="routeBadge" title="Como a linha do mapa foi desenhada">Sem trilha</span>
+                        </div>
+                        <div class="rf-custom" id="rfCustom" hidden>
+                            <label>De <input type="datetime-local" id="rfFrom" /></label>
+                            <label>Até <input type="datetime-local" id="rfTo" /></label>
+                            <span class="rf-note">horário de São Paulo</span>
+                        </div>
+                        <div class="route-summary" id="routeSummary" aria-live="polite">Resumo: —</div>
+                        <details class="route-filters" id="routeFilters" open>
+                            <summary>Filtros e aparência do mapa</summary>
+                            <div class="rf-grid">
+                                <div class="rf-group">
+                                    <span class="rf-label">Mostrar</span>
+                                    <div class="rf-seg" id="rfMode" role="group" aria-label="Movimento ou paradas">
+                                        <button type="button" data-mode="all">Tudo</button>
+                                        <button type="button" data-mode="move">Só movimento</button>
+                                        <button type="button" data-mode="stop">Só paradas</button>
+                                    </div>
+                                </div>
+                                <div class="rf-group">
+                                    <span class="rf-label">Velocidade (km/h)</span>
+                                    <span class="rf-range"><input type="number" id="rfVmin" min="0" max="300" step="5" inputmode="numeric" placeholder="mín" aria-label="Velocidade mínima" /> – <input type="number" id="rfVmax" min="0" max="300" step="5" inputmode="numeric" placeholder="máx" aria-label="Velocidade máxima" /></span>
+                                </div>
+                                <div class="rf-group">
+                                    <span class="rf-label">Fonte</span>
+                                    <label class="rf-check"><input type="checkbox" id="rfGnss" /> GNSS</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfWifi" /> Wi‑Fi</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfCell" /> Célula</label>
+                                </div>
+                                <div class="rf-group">
+                                    <span class="rf-label">Colorir por</span>
+                                    <select id="rfColor" aria-label="Colorir a rota por">
+                                        <option value="speed">Velocidade</option>
+                                        <option value="hour">Hora do dia</option>
+                                        <option value="battery">Bateria</option>
+                                    </select>
+                                </div>
+                                <div class="rf-group">
+                                    <span class="rf-label">Mapa</span>
+                                    <select id="rfBase" aria-label="Mapa base">
+                                        <option value="light">Claro</option>
+                                        <option value="dark">Escuro</option>
+                                        <option value="sat">Satélite</option>
+                                        <option value="osm">Ruas (OpenStreetMap)</option>
+                                    </select>
+                                </div>
+                                <div class="rf-group rf-checks">
+                                    <label class="rf-check"><input type="checkbox" id="rfSnap" /> Ajustar às ruas</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfRaw" /> Pontos brutos</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfArrows" /> Setas</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfAnimate" /> Animar o trecho recente</label>
+                                    <label class="rf-check"><input type="checkbox" id="rfFollow" /> Seguir o aparelho</label>
+                                </div>
+                                <div class="rf-group rf-actions">
+                                    <button type="button" class="btn btn-outline btn-sm" id="rfFit">Enquadrar rota</button>
+                                    <button type="button" class="btn btn-outline btn-sm" id="rfReset">Limpar filtros</button>
+                                </div>
+                            </div>
+                            <div class="route-legend" id="routeLegend" aria-hidden="true"></div>
+                        </details>
+                    </div>
                     <div class="card-body map-body" id="map"></div>
                     <div class="playback-bar" id="playbackBar" aria-label="Playback da trilha">
                         <button type="button" class="btn btn-outline btn-sm" id="playbackPlay" title="Play/Pause">▶</button>
@@ -474,7 +546,8 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="presence-core.js?v=32"></script>
-    <script src="app.js?v=32"></script>
+    <script src="presence-core.js?v=33"></script>
+    <script src="route-core.js?v=33"></script>
+    <script src="app.js?v=33"></script>
 </body>
 </html>
