@@ -1,4 +1,4 @@
-/* nRF9151 NTN Pro (v36) — UI. Lógica em pro-core.js (window.NtnPro). */
+/* nRF9151 NTN Pro (v37) — UI. Lógica em pro-core.js (window.NtnPro). */
 (() => {
   const P = window.NtnPro;
   const onNetlify = /netlify\.app$/i.test(location.hostname) || /^(localhost|127\.)/.test(location.hostname);
@@ -9,7 +9,7 @@
   const dmy = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
   const netTag = (n) => (n ? `<span class="tag ${n}">${n === 'ntn' ? 'Satélite' : 'Cat-M'}</span>` : '—');
   const LS = 'ntnpro.filters';
-  const st = Object.assign({ src: 'live', period: '24h', net: 'all', sw: false }, JSON.parse(localStorage.getItem(LS) || '{}'));
+  const st = Object.assign({ src: 'live', period: '24h', net: 'all', pos: 'all', sw: false }, JSON.parse(localStorage.getItem(LS) || '{}'));
   const params = new URLSearchParams(location.search);
   if (params.get('replay') === '1') st.src = 'replay';
   let live = [], replay = null, rpCursor = null, rpTimer = null, lastLoad = null, fitted = false;
@@ -25,7 +25,7 @@
   }
   function nowRef() { return st.src === 'replay' ? (rpCursor ?? (replay ? Date.parse(replay.records[replay.records.length - 1].ts) + 60000 : Date.now())) : Date.now(); }
   function view() {
-    const f = { period: st.src === 'replay' ? 'all' : st.period, net: st.net, switchesOnly: st.sw };
+    const f = { period: st.src === 'replay' ? 'all' : st.period, net: st.net, pos: st.pos, switchesOnly: st.sw };
     return P.filterRecords(recs(), f, nowRef());
   }
 
@@ -38,7 +38,8 @@
     if (r.prevRttMs != null) rows.push(['Latência msg anterior', P.fmtMs(r.prevRttMs)]);
     if (r.bytes) rows.push(['Bytes', r.bytes + ' B (payload)']);
     rows.push(['Entrega', r.late > 0 ? `atrasada ${P.fmtDur(r.late)} (fila)` : 'em tempo real']);
-    if (r.posSrc) rows.push(['Posição', r.posSrc + (r.acc != null ? ' · ±' + r.acc + ' m' : '')]);
+    if (r.posSrc) rows.push(['Posição', (({ gnss: 'GNSS', celula: 'Célula (nRF Cloud)', salva: 'Salva (última conhecida)', injetada: 'Injetada no modem (NTN)' })[r.posSrc] || r.posSrc) + (r.acc != null ? ' · ±' + r.acc + ' m' : '')]);
+    if (r.gnssAge != null) rows.push(['GPS', (r.gnssAge < 0 ? 'sem fix desde o boot' : 'fix há ' + P.fmtDur(r.gnssAge)) + (r.gnssSats != null ? ' · ' + r.gnssSats + ' sats' : '')]);
     if (r.mv != null) rows.push(['Tensão / temp.', r.mv + ' mV' + (r.temp != null ? ' · ' + r.temp + ' °C' : '')]);
     if (r.replay) rows.push(['Fonte', 'REPLAY (log real)']);
     return '<table>' + rows.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join('') + '</table>';
@@ -51,9 +52,12 @@
       const r = p.rec, c = P.NET[p.net]?.color || '#888', ev = r.type === 'event';
       const jitter = 0.00012 * (i % 7); // separa pontos sobrepostos da placa parada (visual)
       const ll = [p.lat + (pts.length > 1 ? jitter * Math.sin(i) : 0), p.lon + (pts.length > 1 ? jitter * Math.cos(i) : 0)];
+      const src = r.posSrc;
+      if (src === 'celula' && r.acc) L.circle([p.lat, p.lon], { radius: Math.min(r.acc, 5000), color: c, weight: 1, dashArray: '4', fillColor: c, fillOpacity: 0.08, interactive: false }).addTo(layer);
+      const sty = src === 'salva' ? { fillOpacity: 0.25, opacity: 0.4 } : src === 'celula' ? { fillOpacity: 0.45, dashArray: '2' } : src === 'injetada' ? { color: '#ffd54a', weight: 2.5 } : {};
       const m = ev && ['sw', 'reg', 'fail'].includes(r.event)
         ? L.marker(ll, { icon: L.divIcon({ className: '', html: `<div style="width:14px;height:14px;background:${c};border:2px solid #fff;border-radius:3px;transform:rotate(45deg)"></div>`, iconSize: [14, 14] }) })
-        : L.circleMarker(ll, { radius: ev ? 5 : 7, color: r.late > 0 ? '#ffb020' : '#fff', dashArray: r.late > 0 ? '3' : null, weight: r.late > 0 ? 2.5 : 1.5, fillColor: c, fillOpacity: 0.95 });
+        : L.circleMarker(ll, { radius: ev ? 5 : 7, color: r.late > 0 ? '#ffb020' : '#fff', dashArray: r.late > 0 ? '3' : null, weight: r.late > 0 ? 2.5 : 1.5, fillColor: c, fillOpacity: 0.95, ...sty });
       m.bindPopup(popup(r)).addTo(layer);
     });
     if (pts.length && (!fitted || st.src === 'replay')) { map.fitBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lon])).pad(0.4), { maxZoom: 16 }); fitted = true; }
@@ -62,7 +66,7 @@
   function drawLive(all) {
     const s = P.liveStatus(all, nowRef());
     const dot = $('lvDot'); dot.className = 'dot ' + (s ? (s.stale && st.src !== 'replay' ? 'stale' : s.net) : '');
-    if (!s) { $('lvNet').textContent = 'sem dados'; ['lvSince', 'lvSig', 'lvOp', 'lvAge', 'lvRx', 'lvDev', 'lvCnt'].forEach((k) => ($(k).textContent = '')); return; }
+    if (!s) { $('lvNet').textContent = 'sem dados'; ['lvSince', 'lvSig', 'lvOp', 'lvAge', 'lvRx', 'lvDev', 'lvCnt', 'lvGps', 'lvGpsD'].forEach((k) => ($(k).textContent = '')); return; }
     $('lvNet').textContent = s.net === 'ntn' ? 'Satélite NTN (Skylo)' : 'Cat-M (LTE-M)';
     $('lvSince').textContent = s.sinceSec != null ? 'há ' + P.fmtDur(s.sinceSec) : '';
     $('lvSig').textContent = s.rsrp != null ? s.rsrp + ' dBm' : '—';
@@ -70,6 +74,9 @@
     $('lvAge').textContent = 'há ' + P.fmtDur(s.ageSec);
     $('lvRx').textContent = dmy(s.lastRx) + (s.stale && st.src !== 'replay' ? ' · sem novidades' : '');
     $('lvDev').textContent = s.mv != null ? (s.mv / 1000).toFixed(2) + ' V' + (s.temp != null ? ' · ' + s.temp + ' °C' : '') : '—';
+    const g = P.gpsStatus(all, nowRef());
+    $('lvGps').textContent = g.age == null ? 'sem fix' : 'fix há ' + P.fmtDur(g.age);
+    $('lvGpsD').textContent = [g.sats != null && g.sats + ' sats', g.src && 'posição: ' + g.src, g.acc != null && '±' + g.acc + ' m'].filter(Boolean).join(' · ');
     $('lvCnt').textContent = s.counters ? `envios ${s.counters.tries} · ok ${s.counters.ok} · falhas ${s.counters.fail} · comutações ${s.counters.switches}` : '';
   }
   function pctS(x) { return x == null ? '—' : (x * 100).toFixed(x >= 0.995 ? 0 : 1) + '%'; }
@@ -117,14 +124,15 @@
     $('replayBanner').hidden = st.src !== 'replay';
     document.querySelectorAll('#srcSeg button').forEach((b) => b.classList.toggle('on', b.dataset.src === st.src));
     document.querySelectorAll('#fNet button').forEach((b) => b.classList.toggle('on', b.dataset.net === st.net));
+    document.querySelectorAll('#fPos button').forEach((b) => b.classList.toggle('on', b.dataset.pos === st.pos));
     $('fPeriod').value = st.period; $('fPeriod').disabled = st.src === 'replay'; $('fSw').checked = st.sw;
     drawLive(all); drawKpis(rs); drawSwitches(st.sw ? all : rs); drawMap(rs); drawTable(rs);
     const empty = $('empty');
     empty.hidden = rs.length > 0;
-    if (!rs.length) empty.innerHTML = st.src === 'live' ? 'Nenhum dado da placa neste período. Verifique se a placa está ligada (app NTN Pro v2.0) ou use <b>Replay da demonstração</b>.' : 'Sem dados de replay.';
+    if (!rs.length) empty.innerHTML = st.src === 'live' ? 'Nenhum dado da placa neste período. Verifique se a placa está ligada (app NTN Pro v2.1) ou use <b>Replay da demonstração</b>.' : 'Sem dados de replay.';
     $('foot').textContent = st.src === 'replay' ? 'REPLAY: ' + (replay?.source || '') : 'atualizado ' + (lastLoad ? hhmm(lastLoad) : '—') + ' · atualiza a cada 15 s';
   }
-  function save() { localStorage.setItem(LS, JSON.stringify({ period: st.period, net: st.net, sw: st.sw })); }
+  function save() { localStorage.setItem(LS, JSON.stringify({ period: st.period, net: st.net, pos: st.pos, sw: st.sw })); }
 
   async function loadLive() {
     try {
@@ -136,7 +144,7 @@
   }
   async function loadReplay() {
     if (replay) return replay;
-    const r = await fetch('replay.json?v=36', { cache: 'no-store' }); replay = await r.json();
+    const r = await fetch('replay.json?v=37', { cache: 'no-store' }); replay = await r.json();
     $('replayTitle').textContent = replay.title; return replay;
   }
   function stopReplay() { clearInterval(rpTimer); rpTimer = null; $('rpPlay').textContent = '▶ Reproduzir'; }
@@ -166,6 +174,7 @@
   // ---------- eventos de UI ----------
   document.querySelectorAll('#srcSeg button').forEach((b) => b.onclick = async () => { st.src = b.dataset.src; stopReplay(); rpCursor = null; fitted = false; if (st.src === 'replay') await loadReplay(); render(); });
   document.querySelectorAll('#fNet button').forEach((b) => b.onclick = () => { st.net = b.dataset.net; save(); render(); });
+  document.querySelectorAll('#fPos button').forEach((b) => b.onclick = () => { st.pos = b.dataset.pos; save(); render(); });
   $('fPeriod').onchange = (e) => { st.period = e.target.value; save(); fitted = false; render(); };
   $('fSw').onchange = (e) => { st.sw = e.target.checked; save(); render(); };
   $('rpPlay').onclick = playReplay;

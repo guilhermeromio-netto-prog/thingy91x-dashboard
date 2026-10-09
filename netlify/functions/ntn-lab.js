@@ -49,7 +49,8 @@ export function normalizeIngest(m, rawLen, rxIso) {
   const rec = {
     type, rx: rxIso, ts: new Date(Date.parse(rxIso) - late * 1000).toISOString(), late, bytes: rawLen,
     seq: num(m.s), up: num(m.u), net: m.n === 'n' ? 'ntn' : m.n === 'c' ? 'catm' : null,
-    lat: num(m.la), lon: num(m.lo), acc: num(m.ac), posSrc: ({ g: 'gnss', s: 'salva', i: 'injetada' })[m.ps] || null,
+    lat: num(m.la), lon: num(m.lo), acc: num(m.ac), posSrc: ({ g: 'gnss', s: 'salva', i: 'injetada', c: 'celula' })[m.ps] || null,
+    gnssAge: num(m.gf), gnssSats: num(m.gv), cell: str(m.cl, 32),
     prevRttMs: num(m.pr) != null && m.pr >= 0 ? m.pr : null,
   };
   if (rec.lat === 0 && rec.lon === 0) { rec.lat = null; rec.lon = null; }
@@ -60,6 +61,31 @@ export function normalizeIngest(m, rawLen, rxIso) {
   });
   else Object.assign(rec, { event: str(m.e, 12), value: num(m.x), info: str(m.i, 40) });
   return rec;
+}
+/** v37: "cl":"72410,C423,0C5F2C16" (PLMN,TAC hex,ECI hex) -> objeto lte do nRF Cloud ground fix. */
+export function parseCell(cl, rsrp) {
+  const m = /^(\d{3})(\d{2,3}),([0-9A-Fa-f]{1,8}),([0-9A-Fa-f]{1,8})$/.exec(String(cl || ''));
+  if (!m) return null;
+  const o = { mcc: +m[1], mnc: +m[2], tac: parseInt(m[3], 16), eci: parseInt(m[4], 16) };
+  if (typeof rsrp === 'number' && rsrp < 0 && rsrp > -160) o.rsrp = rsrp;
+  return o;
+}
+async function cellFix(store, lte) {
+  const key = 'cell/' + [lte.mcc, lte.mnc, lte.tac, lte.eci].join('-');
+  const hit = await store.get(key, { type: 'json' }).catch(() => null);
+  if (hit && (hit.lat != null ? Date.now() - hit.at < 30 * 86400000 : Date.now() - hit.at < 6 * 3600000)) return hit;
+  const tok = (process.env.NRF_TEAM_READ_TOKEN || process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^Bearer\s+/i, '');
+  let out = { lat: null, lon: null, acc: null, at: Date.now(), err: 'sem token' };
+  if (tok) {
+    try {
+      const r = await fetch('https://api.nrfcloud.com/v1/location/ground-fix', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify({ lte: [lte] }), signal: AbortSignal.timeout(8000) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && typeof j.lat === 'number') out = { lat: j.lat, lon: j.lon, acc: Math.round(j.uncertainty ?? 0) || null, at: Date.now(), via: j.fulfilledWith || 'SCELL' };
+      else out.err = 'nRF Cloud HTTP ' + r.status + (j.message ? ': ' + String(j.message).slice(0, 60) : '');
+    } catch (e) { out.err = 'nRF Cloud: ' + String(e && e.message || e).slice(0, 60); }
+  }
+  await store.setJSON(key, out).catch(() => {});
+  return out;
 }
 /** Versao publica: posicao arredondada (~100 m). */
 export function publicView(rec) { return { ...rec, lat: r3(rec.lat), lon: r3(rec.lon) }; }
@@ -87,6 +113,15 @@ export default async (req) => {
     const rx = new Date().toISOString();
     const rec = normalizeIngest(m, raw.length, rx);
     if (!rec) return json(400, { ok: false, error: 'bad message' });
+    // v37: sem fix GNSS recente -> posicao pela celula servidora (nRF Cloud ground fix, cache por celula)
+    if (rec.cell && rec.posSrc !== 'gnss' && rec.net === 'catm') {
+      const lte = parseCell(rec.cell, rec.rsrp);
+      if (lte) {
+        const f = await cellFix(store, lte);
+        if (f.lat != null) Object.assign(rec, { lat: f.lat, lon: f.lon, acc: f.acc, posSrc: 'celula' });
+        else Object.assign(rec, { lat: null, lon: null, acc: null, posSrc: 'celula sem posicao', posErr: f.err });
+      }
+    }
     const key = dayKey(rec.ts);
     const list = (await store.get(key, { type: 'json' }).catch(() => null)) || [];
     const dup = rec.seq != null && list.some((x) => x.seq === rec.seq && x.type === rec.type);
