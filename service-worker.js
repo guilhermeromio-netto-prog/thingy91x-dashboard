@@ -1,4 +1,4 @@
-const CACHE = 'thingy91x-v33';
+const CACHE = 'thingy91x-v35';
 const ASSETS = ['./manifest.json', './icon.svg'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

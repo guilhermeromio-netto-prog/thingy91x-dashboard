@@ -9,7 +9,7 @@
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<link rel="stylesheet" href="ntn.css?v=34">
+<link rel="stylesheet" href="ntn.css?v=35">
 </head>
 <body>
 <header class="top">
@@ -33,6 +33,22 @@
       <div class="kpi"><span>IP / ping</span><b id="kPing">—</b></div>
     </div>
     <div class="steps" id="steps"></div>
+  </section>
+  <section class="card app-card" id="appCard" hidden>
+    <div class="card-h"><h2>App dos 4 botões <small id="appTitle" class="muted"></small></h2><span id="appAuto" class="pill"></span></div>
+    <div class="kpis" id="appKpis"></div>
+    <div class="app-grid">
+      <div><h3>Botões e LEDs</h3><ul class="help">
+        <li><b>Botão 1</b> alterna Cat-M ↔ NTN (pega GNSS antes do satélite).</li>
+        <li><b>Botão 2</b> status completo (aparece aqui em até 1 min).</li>
+        <li><b>Botão 3</b> mensagem de teste ≤ 256 B para a nuvem, mede ida e volta (mín. 30 s em NTN).</li>
+        <li><b>Botão 4</b> modo automático: Cat-M; cai para NTN após 3 min sem rede ou CEREG 91; tenta Cat-M a cada 15 min.</li>
+        <li>LED1 fixo = Cat-M registrado · LED2 piscando lento = NTN registrado · LED1/LED2 piscando rápido = buscando · LED3 = GNSS/envio em curso · LED4 = modo auto · todos piscando = erro.</li></ul></div>
+      <div><h3>Envios de teste (medido na placa)</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Seq</th><th>Rede</th><th>Resultado</th><th>Ida e volta</th><th>Total (DNS+TLS)</th></tr></thead><tbody id="appTx"></tbody></table></div>
+        <h3>Recebido pela nuvem</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Chegou</th><th>Seq</th><th>Rede</th><th>Operadora</th><th>Sinal</th><th>Tensão</th><th>RTT anterior</th></tr></thead><tbody id="appRx"></tbody></table></div></div>
+    </div>
+    <h3>Eventos do app <label class="small"><input type="checkbox" id="fAppAll"> mostrar AT/URC</label></h3>
+    <ol id="appEv" class="timeline"></ol>
   </section>
   <section class="card map-card">
     <div class="card-h"><h2>Mapa</h2><div class="legend"><i class="lg catm"></i>Cat-M <i class="lg ntn"></i>NTN (satélite)</div></div>
@@ -72,6 +88,6 @@
   </section>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="ntn.js?v=34"></script>
+<script src="ntn.js?v=35"></script>
 </body>
 </html>

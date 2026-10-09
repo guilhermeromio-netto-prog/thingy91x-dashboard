@@ -1,4 +1,4 @@
-/* nRF9151 NTN Lab v34 — lê o resumo publicado pelo uploader do Mac (Netlify Blobs) com polling de 15 s. */
+/* nRF9151 NTN Lab v35 — lê o resumo publicado pelo uploader do Mac (Netlify Blobs) com polling de 15 s. */
 (function () {
   'use strict';
   const onNetlify = /netlify\.app$/i.test(location.hostname) || /^(localhost|127\.)/.test(location.hostname);
@@ -14,6 +14,7 @@
   const ACT = { '7': 'LTE-M (Cat-M)', '9': 'NB-IoT', '14': 'NTN NB-IoT (satélite)' };
   const COLORS = { NTN: '#7b2ff7', CATM: '#1e6fff', GNSS: '#e49b0f' };
 
+  let pings = [];
   let data = null, mode = 'live', selected = null, map, layer, fitted = false, tick = null;
 
   function initMap() {
@@ -28,7 +29,7 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       if (!j.data) throw new Error('sem dados publicados');
-      data = j.data; mode = 'live';
+      data = j.data; pings = j.pings || []; mode = 'live';
     } catch (e) {
       if (!data || mode === 'demo') {
         try { const r2 = await fetch('demo.json?t=' + Date.now(), { cache: 'no-store' }); data = await r2.json(); mode = 'demo'; } catch { /* nada */ }
@@ -72,10 +73,34 @@
     renderSteps(last, c);
     renderDevice();
     renderMap();
+    renderApp();
     renderHist();
     if (!selected || !sessionOf(selected)) selected = last.id;
     renderSessSel();
     renderTimeline();
+  }
+
+
+  function renderApp() {
+    const a = data.app; $('appCard').hidden = !a; if (!a) return;
+    const s = a.status || {};
+    $('appTitle').textContent = '· ' + (a.connected ? 'placa no USB' : 'placa desconectada') + ' · última linha ' + fmtT(a.lastLineAt) + (a.statusAt ? ' · status (Botão 2) ' + fmtT(a.statusAt) : '');
+    const au = $('appAuto'); au.textContent = 'Modo auto ' + (a.auto ? 'LIGADO' : 'desligado'); au.className = 'pill ' + (a.auto ? 'on' : '');
+    const k = [['Rede', (a.net === 'ntn' ? 'NTN (satélite)' : 'Cat-M') + ([1, 5].includes(a.stat) ? ' · registrado' : ' · buscando')],
+      ['Operadora / banda', s.plmn ? s.plmn + (s.band ? ' · B' + s.band : '') : '—'], ['Sinal', s.rsrp != null && s.rsrp !== 999 ? s.rsrp + ' dBm · SNR ' + s.snr + ' dB' : '—'],
+      ['IP', s.ip || '—'], ['Tensão / temp.', s.mv > 0 ? (s.mv / 1000).toFixed(2).replace('.', ',') + ' V · ' + s.temp + ' °C' : '—'], ['Modem', a.fw || s.fw || '—']];
+    $('appKpis').innerHTML = k.map(([n, v]) => '<div class="kpi"><span>' + esc(n) + '</span><b>' + esc(v) + '</b></div>').join('');
+    $('appTx').innerHTML = (a.tx || []).slice().reverse().map((x) => '<tr><td>' + fmtT(x.t) + '</td><td>' + esc(x.seq) + '</td><td><span class="pill ' + (x.net === 'ntn' ? 'ntn' : 'catm') + '">' + (x.net === 'ntn' ? 'NTN' : 'Cat-M') + '</span></td><td>' +
+      (x.ok ? '<span class="res-ok">HTTP ' + esc(x.http) + '</span>' : '<span class="res-err">' + esc(x.why) + '</span>') + '</td><td>' + (x.ok ? ms(x.rttMs) : '—') + '</td><td>' + ms(x.totalMs) + '</td></tr>').join('') || '<tr><td colspan="6" class="muted">Aperte o Botão 3.</td></tr>';
+    $('appRx').innerHTML = pings.slice().reverse().slice(0, 20).map((p) => '<tr><td>' + fmtT(p.rx) + '</td><td>' + esc(p.seq) + '</td><td>' + (p.net === 'ntn' ? 'NTN' : 'Cat-M') + '</td><td>' + esc(p.plmn || '—') + '</td><td>' +
+      (p.rsrp != null && p.rsrp !== 999 ? esc(p.rsrp) + ' dBm' : '—') + '</td><td>' + (p.mv > 0 ? (p.mv / 1000).toFixed(2).replace('.', ',') + ' V' : '—') + '</td><td>' + (p.prevRttMs > 0 ? ms(p.prevRttMs) : '—') + '</td></tr>').join('') || '<tr><td colspan="7" class="muted">Nada recebido ainda.</td></tr>';
+    const all = $('fAppAll').checked;
+    const ev = (a.events || []).filter((e) => all || e.level !== 'muted').slice().reverse().slice(0, 80);
+    $('appEv').innerHTML = ev.map((e) => '<li class="' + esc(e.level) + '"><span class="tm">' + fmtT(e.t) + '</span><span class="lv ' + esc(e.level) + '"></span><span class="tx">' + esc(e.text) + (all && e.raw ? '<span class="raw">' + esc(e.raw) + '</span>' : '') + '</span></li>').join('');
+    if (s.pos && s.pos.lat) {
+      const ll = [s.pos.lat, s.pos.lon];
+      L.circleMarker(ll, { radius: 9, color: '#fff', weight: 3, fillColor: a.net === 'ntn' ? COLORS.NTN : COLORS.CATM, fillOpacity: 1 }).bindPopup('<b>App dos botões</b> · posição ' + esc(s.pos.src) + (s.pos.rounded ? ' (arredondada)' : '')).addTo(layer);
+    }
   }
 
   function renderSteps(s, c) {
@@ -150,6 +175,7 @@
     $('sessSel').addEventListener('change', (e) => { selected = e.target.value; renderTimeline(); });
     $('fImportant').addEventListener('change', renderTimeline);
     $('fRaw').addEventListener('change', renderTimeline);
+    $('fAppAll').addEventListener('change', renderApp);
     load(); setInterval(load, POLL_MS);
   });
 })();

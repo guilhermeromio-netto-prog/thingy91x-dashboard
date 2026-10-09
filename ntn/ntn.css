@@ -40,3 +40,6 @@ body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;ba
 .help{padding-left:18px;font-size:.88rem;display:grid;gap:5px}code{background:#f1f2f6;padding:1px 5px;border-radius:5px;font-size:.82rem}
 .muted{color:var(--muted)}.small{font-size:.78rem;margin-top:8px}
 @media (max-width:900px){.grid{grid-template-columns:1fr}.status-card,.map-card,.dev-card,.tl-card,.hist-card,.help-card{grid-column:1;grid-row:auto}.kpis{grid-template-columns:repeat(2,1fr)}#map{height:320px}}
+
+.app-card{grid-column:1/-1}.app-grid{display:grid;grid-template-columns:1fr 1.3fr;gap:16px;margin:10px 0}.app-card h3{font-size:.9rem;margin:10px 0 6px}@media(max-width:900px){.app-grid{grid-template-columns:1fr}}
+.pill.on{background:#e5f6ec;color:var(--ok)}
