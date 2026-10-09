@@ -30,6 +30,9 @@ await t('core: comutações com tempo até registrar', () => {
   assert.equal(s[0].to, 'ntn'); assert.equal(s[0].regSec, 748); assert.equal(s[0].fixSec, 100); assert.equal(s[0].ok, true);
   assert.equal(s[1].to, 'catm'); assert.equal(s[1].regSec, 3);
 });
+await t('core: sw de boot/reinício não conta como comutação', () => {
+  assert.equal(P.switches([ev(1, 0, 'catm', 'sw', 0, { info: 'boot' }), ev(2, 5, 'catm', 'sw', 0, { info: 'reinicio' })]).length, 0);
+});
 await t('core: KPIs (entrega, latência por rede, registro NTN, atrasadas)', () => {
   const k = P.kpis(sim, T0 + 1600e3);
   assert.equal(k.net.catm.received + k.net.ntn.received, 13);

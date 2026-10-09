@@ -39,6 +39,7 @@
     const out = [];
     let cur = null;
     for (const r of rs) {
+      if (r.event === 'sw' && ['boot', 'reinicio'].includes(r.info)) continue; // boot/reinicio nao e comutacao
       if (r.event === 'sw') {
         if (cur) out.push(cur);
         cur = { at: r.ts, to: r.value === 1 ? 'ntn' : 'catm', why: r.info || '', regSec: null, ok: null, fixSec: null, replay: !!r.replay };
