@@ -1,0 +1,1075 @@
+{
+ "schema": "ntn-lab/1",
+ "generatedAt": "2026-10-09T14:33:20-03:00",
+ "uploader": {
+  "host": "Mac do Guilherme",
+  "intervalSec": 30,
+  "precise": false
+ },
+ "device": {
+  "model": "nRF9151 DK",
+  "app": "Serial Modem v1.0.0 (NCS 3.2.2)",
+  "sim": "Telekom Global (SIM com perfil NTN Skylo)",
+  "fw": "mfw_nrf9151-ntn_1.0.1",
+  "iccid": "898822••••••••••5275",
+  "imsi": "90140••••••0524",
+  "apn": "internet.m2mportal.de"
+ },
+ "current": {
+  "state": "ntn_registered",
+  "label": "NTN registrado no satélite",
+  "network": "NTN",
+  "since": "2026-10-09T14:17:11-03:00",
+  "session": "ntn-20261009-141711",
+  "live": true,
+  "searchSeconds": 748,
+  "lastEventAt": "2026-10-09T14:32:43-03:00"
+ },
+ "fix": {
+  "lat": -23.545,
+  "lon": -46.781,
+  "alt": 762,
+  "acc": 11,
+  "ttff": 104,
+  "t": "2026-10-09T14:18:55-03:00",
+  "rounded": true,
+  "session": "ntn-20261009-141711",
+  "network": "NTN"
+ },
+ "sessions": [
+  {
+   "id": "catm-20261009-140326",
+   "kind": "catm",
+   "file": "catm-20261009-140326.txt",
+   "start": "2026-10-09T14:03:28-03:00",
+   "end": "2026-10-09T14:08:45-03:00",
+   "fw": "mfw_nrf91x1_2.0.4",
+   "iccid": "898822••••••••••5275",
+   "imsi": "90140••••••0524",
+   "operator": "CLARO BR",
+   "plmn": "72405",
+   "band": "28",
+   "act": "7",
+   "rsrp": -75,
+   "snr": 15,
+   "tac": "B2F3",
+   "cell": "01B12C09",
+   "ip": "10.35.x.x",
+   "ping": [
+    353,
+    343,
+    358
+   ],
+   "pingAvg": 351,
+   "regSeconds": null,
+   "registered": true,
+   "result": null,
+   "phase": null,
+   "cfun1At": "2026-10-09T14:03:40-03:00",
+   "regAt": null,
+   "fix": null,
+   "searchCount": 0,
+   "ceLevel": null,
+   "lastStat": "0",
+   "radio": "0",
+   "events": [
+    {
+     "t": "2026-10-09T14:03:29-03:00",
+     "text": "SIM ativado (CFUN=41)",
+     "level": "muted",
+     "raw": "AT+CFUN=41",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:03:38-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:03:39-03:00",
+     "text": "Modo de sistema: LTE-M + GNSS",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=1,0,1,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:03:39-03:00",
+     "text": "APN configurado: internet.m2mportal.de",
+     "level": "muted",
+     "raw": "AT+CGDCONT=0,\"IP\",\"internet.m2mportal.de\"",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:03:40-03:00",
+     "text": "Rádio LIGADO (CFUN=1)",
+     "level": "info",
+     "raw": "AT+CFUN=1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:03:48-03:00",
+     "text": "Busca leve concluída sem rede selecionável (o modem continua procurando)",
+     "level": "info",
+     "raw": "%MDMEV: SEARCH STATUS 1",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:04:53-03:00",
+     "text": "Procurando / tentando registrar · LTE-M, célula 01B12C09 / TAC B2F3",
+     "level": "info",
+     "raw": "+CEREG: 2,\"B2F3\",\"01B12C09\",7",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:04:53-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:04:59-03:00",
+     "text": "Busca completa concluída",
+     "level": "info",
+     "raw": "%MDMEV: SEARCH STATUS 2",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:04:59-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 01B12C09 / TAC B2F3",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"B2F3\",\"01B12C09\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:04:59-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 01B12C09 / TAC B2F3",
+     "level": "ok",
+     "raw": "+CEREG: 5,5,\"B2F3\",\"01B12C09\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:05:04-03:00",
+     "text": "Rede CLARO BR (LTE-M) banda 28 · sinal RSRP -85 dBm, SNR 8 dB",
+     "level": "ok",
+     "raw": "%XMONITOR: 5,\"CLARO BR\",\"\",\"72405\",\"B2F3\",7,28,\"01B12C09\",148,9610,55,32,\"\",\"11100000\",\"11100000\",\"01001001\"",
+     "tag": "monitor"
+    },
+    {
+     "t": "2026-10-09T14:05:05-03:00",
+     "text": "Endereço IP recebido (10.35.x.x)",
+     "level": "ok",
+     "raw": "+CGPADDR: 0,\"10.35.x.x\"",
+     "tag": "ip"
+    },
+    {
+     "t": "2026-10-09T14:05:05-03:00",
+     "text": "Ping para 8.8.8.8",
+     "level": "info",
+     "raw": "AT#XPING=\"8.8.8.8\",45,5000,3",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:05:09-03:00",
+     "text": "Ping média 351 ms",
+     "level": "ok",
+     "raw": "#XPING: average 0.351 seconds",
+     "tag": "ping"
+    },
+    {
+     "t": "2026-10-09T14:05:19-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:05:34-03:00",
+     "text": "GNSS parado",
+     "level": "muted",
+     "raw": "#XGPS: 1,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:05:34-03:00",
+     "text": "GNSS iniciado — procurando satélites de posição",
+     "level": "info",
+     "raw": "AT#XGPS=1,0,1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:05:34-03:00",
+     "text": "GNSS procurando",
+     "level": "muted",
+     "raw": "#XGPS: 1,1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:08:35-03:00",
+     "text": "GNSS parado",
+     "level": "muted",
+     "raw": "#XGPS: 1,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:08:35-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 01B12C09 / TAC B2F3",
+     "level": "ok",
+     "raw": "+CEREG: 5,5,\"B2F3\",\"01B12C09\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:08:35-03:00",
+     "text": "Rede CLARO BR (LTE-M) banda 28 · sinal RSRP -75 dBm, SNR 15 dB",
+     "level": "ok",
+     "raw": "%XMONITOR: 5,\"CLARO BR\",\"\",\"72405\",\"B2F3\",7,28,\"01B12C09\",148,9610,65,39,\"\",\"11100000\",\"11100000\",\"01001001\"",
+     "tag": "monitor"
+    },
+    {
+     "t": "2026-10-09T14:08:44-03:00",
+     "text": "Modem desligado (CFUN=0)",
+     "level": "warn",
+     "raw": "AT+CFUN=0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:08:45-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:08:45-03:00",
+     "text": "Não registrado, sem procurar",
+     "level": "warn",
+     "raw": "+CEREG: 0",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:08:45-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": "catm-20261009-141250",
+   "kind": "catm",
+   "file": "catm-20261009-141250.txt",
+   "start": "2026-10-09T14:12:50-03:00",
+   "end": "2026-10-09T14:14:12-03:00",
+   "fw": "mfw_nrf9151-ntn_1.0.1 (presumido)",
+   "iccid": null,
+   "imsi": null,
+   "operator": "VIVO",
+   "plmn": "72410",
+   "band": "3",
+   "act": "7",
+   "rsrp": -92,
+   "snr": 1,
+   "tac": "C80B",
+   "cell": "0C5F1917",
+   "ip": "10.81.x.x",
+   "ping": [],
+   "pingAvg": null,
+   "regSeconds": 80,
+   "registered": true,
+   "result": "registrado",
+   "phase": null,
+   "cfun1At": "2026-10-09T14:12:51-03:00",
+   "regAt": "2026-10-09T14:14:11-03:00",
+   "fix": null,
+   "searchCount": 0,
+   "ceLevel": null,
+   "lastStat": "5",
+   "radio": "1",
+   "events": [
+    {
+     "t": "2026-10-09T14:12:50-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:12:50-03:00",
+     "text": "Trava de banda removida",
+     "level": "muted",
+     "raw": "AT%XBANDLOCK=0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:12:50-03:00",
+     "text": "Modo de sistema: LTE-M + GNSS",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=1,0,1,0,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:12:50-03:00",
+     "text": "APN configurado: internet.m2mportal.de",
+     "level": "muted",
+     "raw": "AT+CGDCONT=0,\"IP\",\"internet.m2mportal.de\"",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:12:51-03:00",
+     "text": "Rádio LIGADO (CFUN=1)",
+     "level": "info",
+     "raw": "AT+CFUN=1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:06-03:00",
+     "text": "Procurando / tentando registrar · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "info",
+     "raw": "+CEREG: 2,\"C80B\",\"0C5F1915\",7",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:06-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:11-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1915\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:11-03:00",
+     "text": "Registrado em LTE-M em 80 s",
+     "level": "ok",
+     "raw": null,
+     "tag": "reg"
+    },
+    {
+     "t": "2026-10-09T14:14:11-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,5,\"C80B\",\"0C5F1915\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:12-03:00",
+     "text": "Rede VIVO (LTE-M) banda 3 · sinal RSRP -92 dBm, SNR 1 dB",
+     "level": "ok",
+     "raw": "%XMONITOR: 5,\"VIVO\",\"\",\"72410\",\"C80B\",7,3,\"0C5F1915\",89,1850,48,25,\"\",\"11100000\",\"11100000\",\"01001001\",10,3,8,1",
+     "tag": "monitor"
+    },
+    {
+     "t": "2026-10-09T14:14:12-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:12-03:00",
+     "text": "Endereço IP recebido (10.81.x.x)",
+     "level": "ok",
+     "raw": "+CGPADDR: 0,\"10.81.x.x\"",
+     "tag": "ip"
+    },
+    {
+     "t": "2026-10-09T14:14:12-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1917 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1917\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": "catm-20261009-141451",
+   "kind": "catm",
+   "file": "catm-20261009-141451.txt",
+   "start": "2026-10-09T14:14:51-03:00",
+   "end": "2026-10-09T14:15:07-03:00",
+   "fw": "mfw_nrf9151-ntn_1.0.1 (presumido)",
+   "iccid": null,
+   "imsi": null,
+   "operator": "VIVO",
+   "plmn": "72410",
+   "band": "3",
+   "act": "7",
+   "rsrp": -90,
+   "snr": 4,
+   "tac": "C80B",
+   "cell": "0C5F1917",
+   "ip": "10.38.x.x",
+   "ping": [
+    452,
+    1576
+   ],
+   "pingAvg": 1014,
+   "regSeconds": 3,
+   "registered": true,
+   "result": "registrado",
+   "phase": null,
+   "cfun1At": "2026-10-09T14:14:52-03:00",
+   "regAt": "2026-10-09T14:14:55-03:00",
+   "fix": null,
+   "searchCount": 0,
+   "ceLevel": null,
+   "lastStat": "5",
+   "radio": "1",
+   "events": [
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Trava de banda removida",
+     "level": "muted",
+     "raw": "AT%XBANDLOCK=0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Não registrado, sem procurar",
+     "level": "warn",
+     "raw": "+CEREG: 0",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:51-03:00",
+     "text": "Modo de sistema: LTE-M + GNSS",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=1,0,1,0,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:52-03:00",
+     "text": "APN configurado: internet.m2mportal.de",
+     "level": "muted",
+     "raw": "AT+CGDCONT=0,\"IP\",\"internet.m2mportal.de\"",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:52-03:00",
+     "text": "Rádio LIGADO (CFUN=1)",
+     "level": "info",
+     "raw": "AT+CFUN=1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:14:53-03:00",
+     "text": "Procurando / tentando registrar · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "info",
+     "raw": "+CEREG: 2,\"C80B\",\"0C5F1915\",7",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:53-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:55-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1915\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:55-03:00",
+     "text": "Registrado em LTE-M em 3 s",
+     "level": "ok",
+     "raw": null,
+     "tag": "reg"
+    },
+    {
+     "t": "2026-10-09T14:14:55-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,5,\"C80B\",\"0C5F1915\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:55-03:00",
+     "text": "Rede VIVO (LTE-M) banda 3 · sinal RSRP -90 dBm, SNR 4 dB",
+     "level": "ok",
+     "raw": "%XMONITOR: 5,\"VIVO\",\"\",\"72410\",\"C80B\",7,3,\"0C5F1915\",89,1850,50,28,\"\",\"11100000\",\"11100000\",\"01001001\",8,3,8,1",
+     "tag": "monitor"
+    },
+    {
+     "t": "2026-10-09T14:14:56-03:00",
+     "text": "Endereço IP recebido (10.38.x.x)",
+     "level": "ok",
+     "raw": "+CGPADDR: 0,\"10.38.x.x\"",
+     "tag": "ip"
+    },
+    {
+     "t": "2026-10-09T14:14:56-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:56-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1917 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1917\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:14:56-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 1,0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:14:56-03:00",
+     "text": "Ping para 8.8.8.8",
+     "level": "info",
+     "raw": "AT#XPING=\"8.8.8.8\",45,5000,3",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Ping média 1014 ms",
+     "level": "ok",
+     "raw": "#XPING: average 1.014 seconds",
+     "tag": "ping"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1915 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1915\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Conexão de rádio em repouso (RRC idle)",
+     "level": "muted",
+     "raw": "+CSCON: 0",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:15:06-03:00",
+     "text": "Registrado em roaming · LTE-M, célula 0C5F1917 / TAC C80B",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"C80B\",\"0C5F1917\",7,,,\"11100000\",\"11100000\"",
+     "tag": "cereg"
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": "catm-20261009-141527",
+   "kind": "catm",
+   "file": "catm-20261009-141527.txt",
+   "start": "2026-10-09T14:15:27-03:00",
+   "end": "2026-10-09T14:15:28-03:00",
+   "fw": "mfw_nrf9151-ntn_1.0.1 (presumido)",
+   "iccid": null,
+   "imsi": null,
+   "operator": null,
+   "plmn": null,
+   "band": null,
+   "act": null,
+   "rsrp": null,
+   "snr": null,
+   "tac": null,
+   "cell": null,
+   "ip": null,
+   "ping": [],
+   "pingAvg": null,
+   "regSeconds": null,
+   "registered": false,
+   "result": null,
+   "phase": null,
+   "cfun1At": null,
+   "regAt": null,
+   "fix": null,
+   "searchCount": 0,
+   "ceLevel": null,
+   "lastStat": null,
+   "radio": "0",
+   "events": [
+    {
+     "t": "2026-10-09T14:15:27-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:27-03:00",
+     "text": "Trava de banda removida",
+     "level": "muted",
+     "raw": "AT%XBANDLOCK=0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:27-03:00",
+     "text": "Modo de sistema: LTE-M + GNSS",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=1,0,1,0,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:27-03:00",
+     "text": "APN configurado: internet.m2mportal.de",
+     "level": "muted",
+     "raw": "AT+CGDCONT=0,\"IP\",\"internet.m2mportal.de\"",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:28-03:00",
+     "text": "Modem desligado (CFUN=0)",
+     "level": "warn",
+     "raw": "AT+CFUN=0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:15:28-03:00",
+     "text": "Configurado LTE-M+GNSS, RF desligado.",
+     "level": "muted",
+     "raw": null,
+     "tag": null
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": "ntn-20261009-141711",
+   "kind": "ntn",
+   "file": "ntn-20261009-141711.txt",
+   "start": "2026-10-09T14:17:11-03:00",
+   "end": "2026-10-09T14:32:43-03:00",
+   "fw": "mfw_nrf9151-ntn_1.0.1",
+   "iccid": "898822••••••••••5275",
+   "imsi": "90140••••••0524",
+   "operator": "Skylo (90198)",
+   "plmn": "90198",
+   "band": null,
+   "act": "14",
+   "rsrp": -133,
+   "snr": -9,
+   "tac": "32CC",
+   "cell": "00064D4C",
+   "ip": "10.214.x.x",
+   "ping": [
+    23442,
+    21420,
+    24323
+   ],
+   "pingAvg": 23062,
+   "regSeconds": 748,
+   "registered": true,
+   "result": "registrado",
+   "phase": "Etapa 3/3",
+   "cfun1At": "2026-10-09T14:18:57-03:00",
+   "regAt": "2026-10-09T14:31:25-03:00",
+   "fix": {
+    "lat": -23.545,
+    "lon": -46.781,
+    "alt": 762,
+    "acc": 11,
+    "ttff": 104,
+    "t": "2026-10-09T14:18:55-03:00",
+    "rounded": true
+   },
+   "searchCount": 6,
+   "ceLevel": "0",
+   "lastStat": "5",
+   "radio": "1",
+   "events": [
+    {
+     "t": "2026-10-09T14:17:12-03:00",
+     "text": "Etapa 1/3: GNSS (ate 300s). Deixe a placa parada, ceu aberto.",
+     "level": "step",
+     "raw": null,
+     "tag": "step"
+    },
+    {
+     "t": "2026-10-09T14:17:12-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:17:12-03:00",
+     "text": "Modo de sistema: só GNSS",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=0,0,1,0,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:17:12-03:00",
+     "text": "GNSS ligado, rádio celular desligado (CFUN=31)",
+     "level": "info",
+     "raw": "AT+CFUN=31",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:17:12-03:00",
+     "text": "GNSS iniciado — procurando satélites de posição",
+     "level": "info",
+     "raw": "AT#XGNSS=1,0,0,300",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:17:13-03:00",
+     "text": "GNSS procurando",
+     "level": "muted",
+     "raw": "#XGNSS: 1,1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "GNSS 1,4",
+     "level": "muted",
+     "raw": "#XGNSS: 1,4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "GNSS parado",
+     "level": "muted",
+     "raw": "#XGNSS: 1,0",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "Posição GNSS obtida: precisão 11 m, altitude 762 m, em 104 s",
+     "level": "ok",
+     "raw": null,
+     "tag": "fix"
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "Etapa 2/3: configurando NTN (NB-IoT NTN / Skylo)",
+     "level": "step",
+     "raw": null,
+     "tag": "step"
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "Rádio desligado / modo avião (CFUN=4)",
+     "level": "muted",
+     "raw": "AT+CFUN=4",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "Modo de sistema: NTN NB-IoT (satélite Skylo)",
+     "level": "info",
+     "raw": "AT%XSYSTEMMODE=0,0,0,0,1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:55-03:00",
+     "text": "APN configurado: internet.m2mportal.de",
+     "level": "muted",
+     "raw": "AT+CGDCONT=0,\"IP\",\"internet.m2mportal.de\"",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:56-03:00",
+     "text": "Posição informada ao modem (o NTN precisa dela para compensar o atraso do satélite)",
+     "level": "info",
+     "raw": "AT%LOCATION=2,…",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:57-03:00",
+     "text": "Etapa 3/3: CFUN=1, aguardando registro no satelite (ate 900s; normal 1-5 min)",
+     "level": "step",
+     "raw": null,
+     "tag": "step"
+    },
+    {
+     "t": "2026-10-09T14:18:57-03:00",
+     "text": "Rádio LIGADO (CFUN=1)",
+     "level": "info",
+     "raw": "AT+CFUN=1",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:18:58-03:00",
+     "text": "Busca leve concluída sem rede selecionável (o modem continua procurando)",
+     "level": "info",
+     "raw": "%MDMEV: SEARCH STATUS 1",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:19:59-03:00",
+     "text": "Nenhuma célula adequada no modo atual (aviso do modem p/ trocar terrestre ↔ satélite) · NTN NB-IoT (satélite)",
+     "level": "warn",
+     "raw": "+CEREG: 91,,,14",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:19:59-03:00",
+     "text": "Sem cobertura / estado desconhecido — modem segue procurando",
+     "level": "warn",
+     "raw": "+CEREG: 4",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:19:59-03:00",
+     "text": "Busca completa concluída",
+     "level": "info",
+     "raw": "%MDMEV: SEARCH STATUS 2",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:20:09-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:21:09-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:21:26-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:22:27-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:22:52-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:23:53-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:24:26-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:25:27-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:26:07-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:27:35-03:00",
+     "text": "Nenhuma célula adequada no modo atual (aviso do modem p/ trocar terrestre ↔ satélite) · NTN NB-IoT (satélite)",
+     "level": "warn",
+     "raw": "+CEREG: 91,,,14",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:27:35-03:00",
+     "text": "Procurando / tentando registrar",
+     "level": "info",
+     "raw": "+CEREG: 2",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:27:35-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:28:15-03:00",
+     "text": "Início de busca periódica (serviço limitado)",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 3",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:29:23-03:00",
+     "text": "Célula do satélite encontrada — tentando registrar · NTN NB-IoT (satélite), célula 00064D4C / TAC 32CC",
+     "level": "info",
+     "raw": "+CEREG: 2,\"32CC\",\"00064D4C\",14",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:29:23-03:00",
+     "text": "Acesso aleatório (PRACH) ao satélite/célula — nível de cobertura 0 (sem/poucas repetições)",
+     "level": "info",
+     "raw": "%MDMEV: PRACH CE-LEVEL 0",
+     "tag": "prach"
+    },
+    {
+     "t": "2026-10-09T14:29:59-03:00",
+     "text": "Acesso aleatório (PRACH) ao satélite/célula — nível de cobertura 0 (sem/poucas repetições)",
+     "level": "info",
+     "raw": "%MDMEV: PRACH CE-LEVEL 0",
+     "tag": "prach"
+    },
+    {
+     "t": "2026-10-09T14:30:34-03:00",
+     "text": "Acesso aleatório (PRACH) ao satélite/célula — nível de cobertura 0 (sem/poucas repetições)",
+     "level": "info",
+     "raw": "%MDMEV: PRACH CE-LEVEL 0",
+     "tag": "prach"
+    },
+    {
+     "t": "2026-10-09T14:30:39-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 1,7,4",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:31:25-03:00",
+     "text": "REGISTRADO NO SATÉLITE (roaming) · NTN NB-IoT (satélite), célula 00064D4C / TAC 32CC",
+     "level": "ok",
+     "raw": "+CEREG: 5,\"32CC\",\"00064D4C\",14,,,\"11100000\",\"00111000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:31:25-03:00",
+     "text": "Registrado no SATÉLITE em 748 s",
+     "level": "ok",
+     "raw": null,
+     "tag": "reg"
+    },
+    {
+     "t": "2026-10-09T14:31:25-03:00",
+     "text": "Fim da busca periódica",
+     "level": "muted",
+     "raw": "%MDMEV: SEARCH STATUS 4",
+     "tag": "search"
+    },
+    {
+     "t": "2026-10-09T14:31:30-03:00",
+     "text": "REGISTRADO NO SATÉLITE (roaming) · NTN NB-IoT (satélite), célula 00064D4C / TAC 32CC",
+     "level": "ok",
+     "raw": "+CEREG: 5,5,\"32CC\",\"00064D4C\",14,,,\"11100000\",\"00111000\"",
+     "tag": "cereg"
+    },
+    {
+     "t": "2026-10-09T14:31:30-03:00",
+     "text": "Rede Skylo (90198) (NTN NB-IoT (satélite)) · sinal RSRP -133 dBm, SNR -9 dB",
+     "level": "ok",
+     "raw": "%XMONITOR: 5,\"\",\"\",\"90198\",\"32CC\",14,255,\"00064D4C\",4,228867,7,15,\"\",\"11100000\",\"00111000\",\"11100000\",0,3,8,8",
+     "tag": "monitor"
+    },
+    {
+     "t": "2026-10-09T14:31:30-03:00",
+     "text": "Endereço IP recebido (10.214.x.x)",
+     "level": "ok",
+     "raw": "+CGPADDR: 0,\"10.214.x.x\"",
+     "tag": "ip"
+    },
+    {
+     "t": "2026-10-09T14:31:31-03:00",
+     "text": "Conexão de rádio ativa (RRC)",
+     "level": "muted",
+     "raw": "+CSCON: 3,1,7,4",
+     "tag": "rrc"
+    },
+    {
+     "t": "2026-10-09T14:31:31-03:00",
+     "text": "Ping para 8.8.8.8",
+     "level": "info",
+     "raw": "AT#XPING=\"8.8.8.8\",45,30000,3",
+     "tag": null
+    },
+    {
+     "t": "2026-10-09T14:32:43-03:00",
+     "text": "Ping média 23062 ms",
+     "level": "ok",
+     "raw": "#XPING: average 23.062 seconds",
+     "tag": "ping"
+    }
+   ],
+   "live": true
+  }
+ ]
+}
