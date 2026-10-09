@@ -7,4 +7,6 @@
   `/.netlify/functions/ntn-lab` (Netlify Blobs, store `ntn-lab`). Escrita exige `Authorization: Bearer $NTN_LAB_WRITE_TOKEN`
   (env secreto no Netlify; cópia só em `~/Documents/nrf9151-ntn/.ntn_lab_token`, chmod 600). GET é público e só devolve o resumo.
 - Sem dados ao vivo, a página usa `ntn/demo.json` (último snapshot sanitizado).
-- Parar o uploader: `kill $(cat ~/Documents/nrf9151-ntn/publish_logs.pid)`. Iniciar: `cd ~/Documents/nrf9151-ntn && nohup python3 publish_logs.py > publish_logs.log 2>&1 &`
+- Uploader roda como LaunchAgent `com.guilherme.ntnlab.uploader` (~/Library/LaunchAgents, log em ~/Library/Logs/ntnlab-uploader.log).
+  Parar: `launchctl bootout gui/$(id -u)/com.guilherme.ntnlab.uploader`. Religar: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.guilherme.ntnlab.uploader.plist`.
+  Remover de vez: parar e apagar o .plist.
