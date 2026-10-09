@@ -3,91 +3,63 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#E20074">
+<meta name="theme-color" content="#0b0f1a">
 <meta name="robots" content="noindex">
-<title>nRF9151 NTN Lab — Cat-M × Satélite</title>
+<title>nRF9151 NTN Pro — Cat-M × Satélite Skylo</title>
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<link rel="stylesheet" href="ntn.css?v=35">
+<link rel="stylesheet" href="pro.css?v=36">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo">T</span><div><h1>nRF9151 NTN Lab</h1><small>Cat-M (LTE-M) × NTN via satélite Skylo · Deutsche Telekom IoT</small></div></div>
-  <div class="top-right">
-    <span id="feed" class="feed">carregando…</span>
-    <a class="link" href="../">← Painel Thingy:91X</a>
+  <div class="brand"><span class="logo">◉</span><div><h1>nRF9151 NTN <em>Pro</em></h1><small>Rastreamento híbrido Cat-M (LTE-M) × satélite NTN Skylo · Deutsche Telekom IoT</small></div></div>
+  <div class="actions">
+    <div class="seg" id="srcSeg"><button data-src="live" class="on">Ao vivo</button><button data-src="replay">Replay da demonstração</button></div>
+    <button id="btnPresent" class="btn" title="Tela cheia / modo apresentação">⛶ Apresentação</button>
+    <div class="menu"><button class="btn" id="btnExport">⇩ Exportar</button>
+      <div class="menu-list" id="exportMenu" hidden><button data-x="csv">CSV</button><button data-x="json">JSON</button><button data-x="print">Relatório imprimível</button></div></div>
+    <a class="link" href="lab.html">NTN Lab (logs)</a>
   </div>
 </header>
-<div id="banner" class="banner" hidden></div>
+<div id="replayBanner" class="replay-banner" hidden>
+  <b>REPLAY</b> <span id="replayTitle"></span>
+  <span class="rp-ctl"><button id="rpPlay" class="btn sm">▶ Reproduzir</button><select id="rpSpeed"><option value="30">30×</option><option value="60" selected>60×</option><option value="120">120×</option></select><span id="rpClock" class="mono"></span></span>
+</div>
+<section class="live" id="live">
+  <div class="live-net"><span id="lvDot" class="dot"></span><div><small>Rede atual</small><b id="lvNet">—</b><span id="lvSince" class="muted"></span></div></div>
+  <div class="live-item"><small>Sinal</small><b id="lvSig">—</b><span id="lvOp" class="muted"></span></div>
+  <div class="live-item"><small>Última mensagem na nuvem</small><b id="lvAge">—</b><span id="lvRx" class="muted"></span></div>
+  <div class="live-item"><small>Placa</small><b id="lvDev">—</b><span id="lvCnt" class="muted"></span></div>
+</section>
+<section class="kpis" id="kpis"></section>
 <main class="grid">
-  <section class="card status-card">
-    <div class="status-row">
-      <div id="statusDot" class="dot off"></div>
-      <div><div class="eyebrow">Status atual</div><div id="statusLabel" class="status-label">—</div><div id="statusDetail" class="muted"></div></div>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><span>Tempo de busca</span><b id="kSearch">—</b></div>
-      <div class="kpi"><span>Rede / tecnologia</span><b id="kNet">—</b></div>
-      <div class="kpi"><span>Célula / TAC</span><b id="kCell">—</b></div>
-      <div class="kpi"><span>IP / ping</span><b id="kPing">—</b></div>
-    </div>
-    <div class="steps" id="steps"></div>
-  </section>
-  <section class="card app-card" id="appCard" hidden>
-    <div class="card-h"><h2>App dos 4 botões <small id="appTitle" class="muted"></small></h2><span id="appAuto" class="pill"></span></div>
-    <div class="kpis" id="appKpis"></div>
-    <div class="app-grid">
-      <div><h3>Botões e LEDs</h3><ul class="help">
-        <li><b>Botão 1</b> alterna Cat-M ↔ NTN (pega GNSS antes do satélite).</li>
-        <li><b>Botão 2</b> status completo (aparece aqui em até 1 min).</li>
-        <li><b>Botão 3</b> mensagem de teste ≤ 256 B para a nuvem, mede ida e volta (mín. 30 s em NTN).</li>
-        <li><b>Botão 4</b> modo automático: Cat-M; cai para NTN após 3 min sem rede ou CEREG 91; tenta Cat-M a cada 15 min.</li>
-        <li>LED1 fixo = Cat-M registrado · LED2 piscando lento = NTN registrado · LED1/LED2 piscando rápido = buscando · LED3 = GNSS/envio em curso · LED4 = modo auto · todos piscando = erro.</li></ul></div>
-      <div><h3>Envios de teste (medido na placa)</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Seq</th><th>Rede</th><th>Resultado</th><th>Ida e volta</th><th>Total (DNS+TLS)</th></tr></thead><tbody id="appTx"></tbody></table></div>
-        <h3>Recebido pela nuvem</h3><div class="table-wrap"><table class="tbl"><thead><tr><th>Chegou</th><th>Seq</th><th>Rede</th><th>Operadora</th><th>Sinal</th><th>Tensão</th><th>RTT anterior</th></tr></thead><tbody id="appRx"></tbody></table></div></div>
-    </div>
-    <h3>Eventos do app <label class="small"><input type="checkbox" id="fAppAll"> mostrar AT/URC</label></h3>
-    <ol id="appEv" class="timeline"></ol>
-  </section>
   <section class="card map-card">
-    <div class="card-h"><h2>Mapa</h2><div class="legend"><i class="lg catm"></i>Cat-M <i class="lg ntn"></i>NTN (satélite)</div></div>
-    <div id="map"></div>
-    <div id="fixInfo" class="muted small"></div>
-  </section>
-  <section class="card dev-card">
-    <div class="card-h"><h2>Dispositivo</h2></div>
-    <dl id="device" class="dl"></dl>
-  </section>
-  <section class="card tl-card">
-    <div class="card-h"><h2>Linha do tempo <small id="tlTitle" class="muted"></small></h2>
+    <div class="card-h">
+      <h2>Mapa da trilha</h2>
       <div class="filters">
-        <select id="sessSel" aria-label="Sessão"></select>
-        <label><input type="checkbox" id="fImportant" checked> Só o essencial</label>
-        <label><input type="checkbox" id="fRaw"> Mostrar AT bruto</label>
+        <select id="fPeriod" aria-label="Período"><option value="1h">Última 1 h</option><option value="6h">6 h</option><option value="today">Hoje</option><option value="24h" selected>24 h</option><option value="7d">7 dias</option><option value="all">Tudo</option></select>
+        <div class="seg" id="fNet"><button data-net="all" class="on">Todas</button><button data-net="catm">Cat-M</button><button data-net="ntn">Satélite</button></div>
+        <label class="chk"><input type="checkbox" id="fSw"> só comutações</label>
       </div>
     </div>
-    <ol id="timeline" class="timeline"></ol>
+    <div id="map"></div>
+    <div class="legend"><span><i style="background:#2f7cf6"></i>Cat-M (celular)</span><span><i style="background:#9b4dff"></i>Satélite NTN (Skylo)</span><span><i class="ring"></i>entregue atrasada (store-and-forward)</span><span><i class="sq"></i>evento de comutação</span><span class="muted">posição pública arredondada (~100 m)</span></div>
   </section>
-  <section class="card hist-card">
-    <div class="card-h"><h2>Histórico de sessões</h2></div>
-    <div class="table-wrap"><table class="tbl"><thead><tr><th>Início</th><th>Tipo</th><th>Resultado</th><th>Operadora / banda</th><th>Sinal</th><th>Registro</th><th>Ping</th><th>Firmware</th></tr></thead><tbody id="hist"></tbody></table></div>
+  <section class="card tl-card">
+    <div class="card-h"><h2>Linha do tempo de comutações</h2><span id="swCount" class="pill"></span></div>
+    <div id="swBar" class="swbar"></div>
+    <ol id="swList" class="swlist"></ol>
   </section>
-  <section class="card help-card">
-    <div class="card-h"><h2>Como ler os códigos</h2></div>
-    <ul class="help">
-      <li><code>+CEREG: 2</code> procurando / tentando registrar. Com célula e <code>,14</code> no fim: achou a célula do satélite e está tentando entrar.</li>
-      <li><code>+CEREG: 1</code> ou <code>5</code> registrado (5 = roaming). Com <code>,14</code> = registrado no satélite (NTN); <code>,7</code> = LTE-M.</li>
-      <li><code>+CEREG: 4</code> sem cobertura / desconhecido: o modem continua procurando.</li>
-      <li><code>+CEREG: 91,,,14</code> nenhuma célula adequada no modo atual (último modo buscado: NTN). É o aviso que a aplicação usa para trocar terrestre ↔ satélite.</li>
-      <li><code>%MDMEV: SEARCH STATUS 1/2</code> busca leve / completa concluída. <code>3/4</code> início / fim de busca periódica (serviço limitado).</li>
-      <li><code>%MDMEV: PRACH CE-LEVEL n</code> o modem está transmitindo o acesso aleatório para a célula (0 = poucas repetições).</li>
-      <li><code>+CSCON: 1</code> conexão de rádio ativa (RRC). <code>0</code> = em repouso.</li>
-    </ul>
-    <p class="muted small">Fonte: Nordic nRF91x1 NTN AT Commands (mfw_nrf9151-ntn 1.0.x). Os dados vêm dos logs no Mac, já sanitizados: ICCID/IMSI mascarados, IP parcial e posição arredondada (~100 m).</p>
+  <section class="card tbl-card">
+    <div class="card-h"><h2>Mensagens e eventos</h2><span id="msgCount" class="muted"></span></div>
+    <div class="table-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Seq</th><th>Rede</th><th>Tipo</th><th>Detalhe</th><th>Sinal</th><th>Bytes</th><th>Latência</th><th>Entrega</th></tr></thead><tbody id="msgBody"></tbody></table></div>
   </section>
 </main>
+<div id="empty" class="empty" hidden></div>
+<footer class="foot muted">nRF9151 DK · modem mfw_nrf9151-ntn_1.0.1 · app NTN Pro v2.0 · mensagens ≤ 256 B, ≥ 30 s em NTN · <span id="foot"></span></footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="ntn.js?v=35"></script>
+<script src="pro-core.js?v=36"></script>
+<script src="pro.js?v=36"></script>
 </body>
 </html>

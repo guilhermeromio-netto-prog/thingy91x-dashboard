@@ -8,8 +8,8 @@
     "dev": "node --watch proxy.js",
     "serve": "node proxy.js",
     "check": "node --check app.js && node --check presence-core.js && node --check route-core.js && node --check proxy.js && node --check netlify/functions/nrfcloud.js && node --check netlify/functions/alerts.js && echo OK",
-    "test": "node tests/presence.test.mjs && node tests/route.test.mjs && node tests/functions.test.mjs",
-    "test:e2e": "python3 tests/e2e_presence.py && python3 tests/e2e_route.py",
+    "test": "node tests/presence.test.mjs && node tests/route.test.mjs && node tests/functions.test.mjs && node tests/ntn-pro.test.mjs",
+    "test:e2e": "python3 tests/e2e_presence.py && python3 tests/e2e_route.py && python3 tests/e2e_ntn_pro.py",
     "test:route-live": "node tests/route.live.mjs"
   },
   "dependencies": {
