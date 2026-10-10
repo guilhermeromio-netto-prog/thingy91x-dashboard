@@ -37,6 +37,7 @@
     if (r.rttMs != null) rows.push(['Latência (medida)', P.fmtMs(r.rttMs)]);
     if (r.prevRttMs != null) rows.push(['Latência msg anterior', P.fmtMs(r.prevRttMs)]);
     if (r.bytes) rows.push(['Bytes', r.bytes + ' B (payload)']);
+    rows.push(['Transporte', r.transport === 'udp' ? 'UDP (relay Fly.io)' : 'HTTPS']);
     rows.push(['Entrega', r.late > 0 ? `atrasada ${P.fmtDur(r.late)} (fila)` : 'em tempo real']);
     if (r.posSrc) rows.push(['Posição', (({ gnss: 'GNSS', celula: 'Célula (nRF Cloud)', salva: 'Salva (última conhecida)', injetada: 'Injetada no modem (NTN)' })[r.posSrc] || r.posSrc) + (r.acc != null ? ' · ±' + r.acc + ' m' : '')]);
     if (r.gnssAge != null) rows.push(['GPS', (r.gnssAge < 0 ? 'sem fix desde o boot' : 'fix há ' + P.fmtDur(r.gnssAge)) + (r.gnssSats != null ? ' · ' + r.gnssSats + ' sats' : '')]);
@@ -114,12 +115,15 @@
     $('swBar').innerHTML = html;
   }
   function drawTable(rs) {
+    // latencia propria de cada msg = 'pr' informado na msg seguinte (mesma sessao)
+    const srt = P.sortRecs(rs).filter((r) => r.seq != null).sort((x, y) => x.seq - y.seq), own = new Map();
+    for (let i = 0; i + 1 < srt.length; i++) if (srt[i + 1].prevRttMs != null && srt[i + 1].seq - srt[i].seq <= 3) own.set(srt[i], srt[i + 1].prevRttMs);
     const rows = rs.slice(-300).reverse();
     $('msgCount').textContent = rs.length + ' registros';
     $('msgBody').innerHTML = rows.map((r) => {
       const det = r.type === 'event' ? (P.EVENT_PT[r.event] || r.event) + (r.info ? ' — ' + r.info : '') + (r.event === 'reg' || r.event === 'fix' ? ' (' + P.fmtDur(r.value) + ')' : '') : 'Telemetria' + (r.plmn ? ' · ' + r.plmn : '');
-      const lat = r.rttMs != null ? P.fmtMs(r.rttMs) : r.prevRttMs != null ? P.fmtMs(r.prevRttMs) + ' (ant.)' : '—';
-      return `<tr><td class="mono">${hhmm(r.ts)}</td><td>${r.seq ?? '—'}</td><td>${netTag(r.net)}</td><td>${r.type === 'event' ? 'evento' : 'telemetria'}</td><td>${esc(det)}</td><td>${r.rsrp != null ? r.rsrp + ' dBm' : '—'}</td><td>${r.bytes ?? '—'}</td><td>${lat}</td><td>${r.late > 0 ? `<span class="tag late">atrasada ${P.fmtDur(r.late)}</span>` : 'tempo real'}</td></tr>`;
+      const lat = r.rttMs != null ? P.fmtMs(r.rttMs) : own.has(r) ? P.fmtMs(own.get(r)) : '—';
+      return `<tr><td class="mono">${hhmm(r.ts)}</td><td>${r.seq ?? '—'}</td><td>${netTag(r.net)}${r.transport === 'udp' ? ' <span class="tag late" style="background:#1f6f43">UDP</span>' : ''}</td><td>${r.type === 'event' ? 'evento' : 'telemetria'}</td><td>${esc(det)}</td><td>${r.rsrp != null ? r.rsrp + ' dBm' : '—'}</td><td>${r.bytes ?? '—'}</td><td>${lat}</td><td>${r.late > 0 ? `<span class="tag late">atrasada ${P.fmtDur(r.late)}</span>` : 'tempo real'}</td></tr>`;
     }).join('');
   }
   function render() {
@@ -148,7 +152,7 @@
   }
   async function loadReplay() {
     if (replay) return replay;
-    const r = await fetch('replay.json?v=39', { cache: 'no-store' }); replay = await r.json();
+    const r = await fetch('replay.json?v=40', { cache: 'no-store' }); replay = await r.json();
     $('replayTitle').textContent = replay.title; return replay;
   }
   function stopReplay() { clearInterval(rpTimer); rpTimer = null; $('rpPlay').textContent = '▶ Reproduzir'; }

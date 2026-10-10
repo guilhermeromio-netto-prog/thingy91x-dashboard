@@ -131,7 +131,7 @@
     return segs.filter((s) => s.pts.length > 1);
   }
 
-  const CSV_COLS = ['ts', 'rx', 'type', 'net', 'seq', 'event', 'value', 'info', 'plmn', 'act', 'band', 'rsrp', 'snr', 'ce', 'mv', 'temp', 'regFor', 'lat', 'lon', 'acc', 'posSrc', 'gnssAge', 'gnssSats', 'cell', 'bytes', 'late', 'prevRttMs', 'rttMs', 'replay'];
+  const CSV_COLS = ['ts', 'rx', 'type', 'net', 'seq', 'event', 'value', 'info', 'plmn', 'act', 'band', 'rsrp', 'snr', 'ce', 'mv', 'temp', 'regFor', 'lat', 'lon', 'acc', 'posSrc', 'gnssAge', 'gnssSats', 'cell', 'transport', 'bytes', 'late', 'prevRttMs', 'rttMs', 'replay'];
   function toCSV(recs) {
     const esc = (v) => (v == null ? '' : /[",\n;]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
     return [CSV_COLS.join(','), ...sortRecs(recs).map((r) => CSV_COLS.map((c) => esc(r[c])).join(','))].join('\n');

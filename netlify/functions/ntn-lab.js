@@ -40,7 +40,7 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v, n = 16) => (typeof v === 'string' ? v.slice(0, n) : null);
 const r3 = (v) => (num(v) != null && v !== 0 ? Math.round(v * 1000) / 1000 : null);
 /** Normaliza uma mensagem compacta da placa (app v2.0). Exportado para testes. */
-export function normalizeIngest(m, rawLen, rxIso) {
+export function normalizeIngest(m, rawLen, rxIso, trHint) {
   if (!m || typeof m !== 'object') return null;
   const type = m.t === 'e' ? 'event' : m.t === 'm' ? 'telemetry' : null;
   if (!type) return null;
@@ -52,6 +52,7 @@ export function normalizeIngest(m, rawLen, rxIso) {
     lat: num(m.la), lon: num(m.lo), acc: num(m.ac), posSrc: ({ g: 'gnss', s: 'salva', i: 'injetada', c: 'celula' })[m.ps] || null,
     gnssAge: num(m.gf), gnssSats: num(m.gv), cell: str(m.cl, 32),
     prevRttMs: num(m.pr) != null && m.pr >= 0 ? m.pr : null,
+    transport: m.tr === 'u' || trHint === 'udp' ? 'udp' : 'https',
   };
   if (rec.lat === 0 && rec.lon === 0) { rec.lat = null; rec.lon = null; }
   if (type === 'telemetry') Object.assign(rec, {
@@ -124,7 +125,7 @@ export default async (req) => {
     if (raw.length > 256) return json(413, { ok: false, error: 'payload > 256 B' });
     let m; try { m = JSON.parse(scrub(raw)); } catch { return json(400, { ok: false, error: 'invalid json' }); }
     const rx = new Date().toISOString();
-    const rec = normalizeIngest(m, raw.length, rx);
+    const rec = normalizeIngest(m, raw.length, rx, url.searchParams.get('tr'));
     if (!rec) return json(400, { ok: false, error: 'bad message' });
     // v37: sem fix GNSS recente -> posicao pela celula servidora (nRF Cloud ground fix, cache por celula)
     if (rec.cell && rec.posSrc !== 'gnss' && rec.net === 'catm') {
