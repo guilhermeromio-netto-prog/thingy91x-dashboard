@@ -123,8 +123,20 @@
     $('msgBody').innerHTML = rows.map((r) => {
       const det = r.type === 'event' ? (P.EVENT_PT[r.event] || r.event) + (r.info ? ' — ' + r.info : '') + (r.event === 'reg' || r.event === 'fix' ? ' (' + P.fmtDur(r.value) + ')' : '') : 'Telemetria' + (r.plmn ? ' · ' + r.plmn : '');
       const lat = r.rttMs != null ? P.fmtMs(r.rttMs) : own.has(r) ? P.fmtMs(own.get(r)) : '—';
-      return `<tr><td class="mono">${hhmm(r.ts)}</td><td>${r.seq ?? '—'}</td><td>${netTag(r.net)}${r.transport === 'udp' ? ' <span class="tag late" style="background:#1f6f43">UDP</span>' : ''}</td><td>${r.type === 'event' ? 'evento' : 'telemetria'}</td><td>${esc(det)}</td><td>${r.rsrp != null ? r.rsrp + ' dBm' : '—'}</td><td>${r.bytes ?? '—'}</td><td>${lat}</td><td>${r.late > 0 ? `<span class="tag late">atrasada ${P.fmtDur(r.late)}</span>` : 'tempo real'}</td></tr>`;
+      return `<tr><td class="mono">${hhmm(r.ts)}</td><td>${r.seq ?? '—'}</td><td>${netTag(r.deliveredNet || r.net)}${r.transport === 'udp' ? ' <span class="tag late" style="background:#1f6f43">UDP</span>' : ''}</td><td>${r.type === 'event' ? 'evento' : 'telemetria'}</td><td>${esc(det)}</td><td>${r.rsrp != null ? r.rsrp + ' dBm' : '—'}</td><td>${r.bytes ?? '—'}</td><td>${lat}</td><td>${r.late > 0 ? `<span class="tag late">atrasada ${P.fmtDur(r.late)}</span>` : 'tempo real'}</td></tr>`;
     }).join('');
+  }
+  const lg = { net: 'all', tr: 'all', late: false, q: '' };
+  let lgRows = [];
+  function lgDesc(r) { return r.type === 'event' ? (P.EVENT_PT[r.event] || r.event) + (r.info ? ' — ' + r.info : '') + (r.value != null && ['reg', 'fix', 'wdog'].includes(r.event) ? ' (' + P.fmtDur(r.value) + ')' : '') : 'Telemetria' + [r.plmn && ' · ' + r.plmn, r.rsrp != null && ' · ' + r.rsrp + ' dBm', r.posSrc && ' · pos ' + r.posSrc].filter(Boolean).join(''); }
+  function drawLog(all) {
+    const srt = all.filter((r) => r.seq != null).slice().sort((x, y) => x.seq - y.seq), own = new Map();
+    for (let i = 0; i + 1 < srt.length; i++) if (srt[i + 1].prevRttMs != null && srt[i + 1].seq - srt[i].seq <= 3) own.set(srt[i], srt[i + 1].prevRttMs);
+    const q = lg.q.toLowerCase();
+    lgRows = P.sortRecs(all).filter((r) => (lg.net === 'all' || r.deliveredNet === lg.net) && (lg.tr === 'all' || (r.transport || 'https') === lg.tr) && (!lg.late || r.late > 0) && (!q || (lgDesc(r) + ' ' + r.seq).toLowerCase().includes(q)))
+      .map((r) => ({ r, lat: r.rttMs ?? own.get(r) ?? null })).reverse();
+    $('lgCount').textContent = lgRows.length + ' registros · ' + lgRows.filter((x) => x.r.deliveredNet === 'ntn').length + ' via satélite';
+    $('lgBody').innerHTML = lgRows.slice(0, 1500).map(({ r, lat }) => `<tr${r.deliveredNet === 'ntn' ? ' style="background:rgba(155,77,255,.16)"' : ''}><td class="mono">${dmy(r.ts)}</td><td class="mono">${dmy(r.rx || r.ts)}</td><td>${r.seq ?? '—'}</td><td>${netTag(r.net)}</td><td>${netTag(r.deliveredNet)}${r.deliveredHow === 'inferido' ? ' <small class="muted">inf.</small>' : ''}</td><td>${(r.transport || 'https').toUpperCase()}</td><td>${r.type === 'event' ? 'evento' : 'telemetria'}</td><td>${esc(lgDesc(r))}</td><td>${r.bytes ?? '—'}</td><td>${lat != null ? P.fmtMs(lat) : '—'}</td><td>${r.late > 0 ? '<span class="tag late">' + P.fmtDur(r.late) + '</span>' : 'tempo real'}</td></tr>`).join('');
   }
   function render() {
     const rs = view();
@@ -134,6 +146,7 @@
     document.querySelectorAll('#fNet button').forEach((b) => b.classList.toggle('on', b.dataset.net === st.net));
     document.querySelectorAll('#fPos button').forEach((b) => b.classList.toggle('on', b.dataset.pos === st.pos));
     $('fPeriod').value = st.period; $('fPeriod').disabled = st.src === 'replay'; $('fSw').checked = st.sw;
+    P.annotateDelivery(all); drawLog(all);
     drawLive(all); drawKpis(rs); drawSwitches(st.sw ? all : rs); drawMap(rs); drawTable(rs);
     const empty = $('empty');
     empty.hidden = rs.length > 0;
@@ -152,7 +165,7 @@
   }
   async function loadReplay() {
     if (replay) return replay;
-    const r = await fetch('replay.json?v=40', { cache: 'no-store' }); replay = await r.json();
+    const r = await fetch('replay.json?v=41', { cache: 'no-store' }); replay = await r.json();
     $('replayTitle').textContent = replay.title; return replay;
   }
   function stopReplay() { clearInterval(rpTimer); rpTimer = null; $('rpPlay').textContent = '▶ Reproduzir'; }
@@ -183,6 +196,15 @@
   document.querySelectorAll('#srcSeg button').forEach((b) => b.onclick = async () => { st.src = b.dataset.src; stopReplay(); rpCursor = null; fitted = false; if (st.src === 'replay') await loadReplay(); render(); });
   document.querySelectorAll('#fNet button').forEach((b) => b.onclick = () => { st.net = b.dataset.net; save(); render(); });
   document.querySelectorAll('#fPos button').forEach((b) => b.onclick = () => { st.pos = b.dataset.pos; save(); render(); });
+  [['lgNet', 'net'], ['lgTr', 'tr']].forEach(([id, k]) => document.querySelectorAll('#' + id + ' button').forEach((b) => b.onclick = () => { lg[k] = b.dataset.v; document.querySelectorAll('#' + id + ' button').forEach((x) => x.classList.toggle('on', x === b)); render(); }));
+  $('lgLate').onchange = (e) => { lg.late = e.target.checked; render(); };
+  $('lgQ').oninput = (e) => { lg.q = e.target.value; render(); };
+  $('lgCsv').onclick = () => {
+    const esc2 = (v) => (v == null ? '' : /[",\n;]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
+    const head = ['criada', 'chegada', 'seq', 'rede_criacao', 'rede_entrega', 'rede_entrega_fonte', 'transporte', 'tipo', 'descricao', 'bytes', 'latencia_ms', 'atraso_s'];
+    const lines = lgRows.map(({ r, lat }) => [r.ts, r.rx, r.seq, r.net, r.deliveredNet, r.deliveredHow, r.transport || 'https', r.type, lgDesc(r), r.bytes, lat, r.late].map(esc2).join(','));
+    download('ntn-log-completo-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '') + '.csv', [head.join(','), ...lines].join('\n'), 'text/csv;charset=utf-8');
+  };
   $('fPeriod').onchange = (e) => { st.period = e.target.value; save(); fitted = false; render(); };
   $('fSw').onchange = (e) => { st.sw = e.target.checked; save(); render(); };
   $('rpPlay').onclick = playReplay;

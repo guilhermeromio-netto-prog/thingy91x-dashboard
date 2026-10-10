@@ -9,7 +9,7 @@
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<link rel="stylesheet" href="pro.css?v=40">
+<link rel="stylesheet" href="pro.css?v=41">
 </head>
 <body>
 <header class="top">
@@ -55,13 +55,25 @@
   </section>
   <section class="card tbl-card">
     <div class="card-h"><h2>Mensagens e eventos</h2><span id="msgCount" class="muted"></span></div>
-    <div class="table-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Seq</th><th>Rede</th><th>Tipo</th><th>Detalhe</th><th>Sinal</th><th>Bytes</th><th>Latência</th><th>Entrega</th></tr></thead><tbody id="msgBody"></tbody></table></div>
+    <div class="table-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Seq</th><th>Rede (entrega)</th><th>Tipo</th><th>Detalhe</th><th>Sinal</th><th>Bytes</th><th>Latência</th><th>Entrega</th></tr></thead><tbody id="msgBody"></tbody></table></div>
+  </section>
+  <section class="card tbl-card" id="logCard">
+    <div class="card-h"><h2>Log completo</h2>
+      <div class="filters">
+        <div class="seg" id="lgNet"><button data-v="all" class="on">Todas entregas</button><button data-v="ntn">Via satélite</button><button data-v="catm">Via Cat-M</button></div>
+        <div class="seg" id="lgTr"><button data-v="all" class="on">HTTPS+UDP</button><button data-v="https">HTTPS</button><button data-v="udp">UDP</button></div>
+        <label class="chk"><input type="checkbox" id="lgLate"> só atrasadas</label>
+        <input id="lgQ" placeholder="buscar…" style="width:110px">
+        <button class="btn sm" id="lgCsv">CSV</button>
+      </div><span id="lgCount" class="muted"></span></div>
+    <div class="table-wrap" style="max-height:520px"><table class="tbl"><thead><tr><th>Criada</th><th>Chegada</th><th>Seq</th><th>Rede criação</th><th>Rede entrega</th><th>Transp.</th><th>Tipo</th><th>Descrição</th><th>Bytes</th><th>Latência (ACK)</th><th>Atraso</th></tr></thead><tbody id="lgBody"></tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Rede de entrega: HTTPS só existe em Cat-M; UDP é inferido pelo modo da placa (comutações) no momento da chegada, até o firmware enviar o campo próprio. Latência = ida e volta até o ACK/HTTP 200, informada pela placa na mensagem seguinte.</div>
   </section>
 </main>
 <div id="empty" class="empty" hidden></div>
-<footer class="foot muted">nRF9151 DK · modem mfw_nrf9151-ntn_1.0.1 · app NTN Pro v2.0 · mensagens ≤ 256 B, ≥ 30 s em NTN · <span id="foot"></span></footer>
+<footer class="foot muted">nRF9151 DK · modem mfw_nrf9151-ntn_1.0.1 · app NTN Pro v2.3 · mensagens ≤ 256 B, ≥ 30 s em NTN · <span id="foot"></span></footer>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="pro-core.js?v=40"></script>
+<script src="pro-core.js?v=41"></script>
 <script src="pro.js?v=40"></script>
 </body>
 </html>

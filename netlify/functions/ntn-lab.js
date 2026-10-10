@@ -53,6 +53,7 @@ export function normalizeIngest(m, rawLen, rxIso, trHint) {
     gnssAge: num(m.gf), gnssSats: num(m.gv), cell: str(m.cl, 32),
     prevRttMs: num(m.pr) != null && m.pr >= 0 ? m.pr : null,
     transport: m.tr === 'u' || trHint === 'udp' ? 'udp' : 'https',
+    txNet: m.tx === 'n' ? 'ntn' : m.tx === 'c' ? 'catm' : null,
   };
   if (rec.lat === 0 && rec.lon === 0) { rec.lat = null; rec.lon = null; }
   if (type === 'telemetry') Object.assign(rec, {

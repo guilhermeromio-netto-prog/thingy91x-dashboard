@@ -99,6 +99,20 @@
     else if (lastG) age = Math.round((now - Date.parse(lastG.ts)) / 1000);
     return { age, sats: lastT ? lastT.gnssSats ?? null : null, src: lastT ? lastT.posSrc : null, acc: lastT ? lastT.acc : null };
   }
+  /** v41: rede de ENTREGA. 'tx' da placa (firmware futuro) e autoritativo; senao HTTPS => Cat-M (so existe em Cat-M);
+   *  UDP => modo da placa no instante da chegada, pela linha do tempo de comutacoes (sw: 1 = NTN, 0 = Cat-M; boot => Cat-M). */
+  function annotateDelivery(recs) {
+    const rs = sortRecs(recs);
+    const tl = rs.filter((r) => r.type === 'event' && (r.event === 'sw' || r.event === 'boot')).map((r) => ({ t: t(r), net: r.event === 'sw' && r.value === 1 ? 'ntn' : 'catm' }));
+    const modeAt = (ms) => { let m = null; for (const x of tl) { if (x.t <= ms) m = x.net; else break; } return m; };
+    for (const r of rs) {
+      const rx = Date.parse(r.rx || r.ts);
+      if (r.txNet) { r.deliveredNet = r.txNet; r.deliveredHow = 'placa'; }
+      else if (r.transport !== 'udp') { r.deliveredNet = r.replay ? r.net : 'catm'; r.deliveredHow = r.replay ? 'replay' : 'https=Cat-M'; }
+      else { r.deliveredNet = modeAt(rx) || r.net; r.deliveredHow = 'inferido'; }
+    }
+    return rs;
+  }
   function liveStatus(recs, now = Date.now()) {
     const rs = sortRecs(recs);
     if (!rs.length) return null;
@@ -131,7 +145,7 @@
     return segs.filter((s) => s.pts.length > 1);
   }
 
-  const CSV_COLS = ['ts', 'rx', 'type', 'net', 'seq', 'event', 'value', 'info', 'plmn', 'act', 'band', 'rsrp', 'snr', 'ce', 'mv', 'temp', 'regFor', 'lat', 'lon', 'acc', 'posSrc', 'gnssAge', 'gnssSats', 'cell', 'transport', 'bytes', 'late', 'prevRttMs', 'rttMs', 'replay'];
+  const CSV_COLS = ['ts', 'rx', 'type', 'net', 'seq', 'event', 'value', 'info', 'plmn', 'act', 'band', 'rsrp', 'snr', 'ce', 'mv', 'temp', 'regFor', 'lat', 'lon', 'acc', 'posSrc', 'gnssAge', 'gnssSats', 'cell', 'deliveredNet', 'deliveredHow', 'transport', 'bytes', 'late', 'prevRttMs', 'rttMs', 'replay'];
   function toCSV(recs) {
     const esc = (v) => (v == null ? '' : /[",\n;]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
     return [CSV_COLS.join(','), ...sortRecs(recs).map((r) => CSV_COLS.map((c) => esc(r[c])).join(','))].join('\n');
@@ -145,5 +159,5 @@
   }
   function fmtMs(ms) { if (ms == null) return '—'; return ms >= 1000 ? (ms / 1000).toFixed(ms >= 10000 ? 0 : 1) + ' s' : Math.round(ms) + ' ms'; }
   const EVENT_PT = { sw: 'Comutação', reg: 'Registrado', lost: 'Perdeu rede', fix: 'Fix GNSS', fail: 'Falha', auto: 'Modo automático', demo: 'Demo de comutação', boot: 'Placa ligou', rst: 'Reinício Cat-M', ping: 'Ping', wait: 'Aguardando dados do satélite/rede', wdog: 'Watchdog: reinício da rede' };
-  return { NET, gpsStatus, filterRecords, switches, kpis, liveStatus, mapPoints, segments, toCSV, fmtDur, fmtMs, pct, EVENT_PT, sortRecs };
+  return { NET, annotateDelivery, gpsStatus, filterRecords, switches, kpis, liveStatus, mapPoints, segments, toCSV, fmtDur, fmtMs, pct, EVENT_PT, sortRecs };
 });
