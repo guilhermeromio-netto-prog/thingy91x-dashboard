@@ -79,7 +79,9 @@
     $('lvGps').textContent = noPos ? 'sem posição no momento' : g.age == null ? 'sem fix' : 'fix há ' + P.fmtDur(g.age);
     $('lvGps').style.color = noPos ? '#ffb020' : '';
     $('lvGpsD').textContent = [g.sats != null && g.sats + ' sats', g.src && 'posição: ' + g.src, g.acc != null && '±' + g.acc + ' m'].filter(Boolean).join(' · ');
-    $('lvCnt').textContent = s.counters ? `envios ${s.counters.tries} · ok ${s.counters.ok} · falhas ${s.counters.fail} · comutações ${s.counters.switches}` : '';
+    const fr = s.failReasons;
+    $('lvCnt').textContent = (s.counters ? `envios ${s.counters.tries} · ok ${s.counters.ok} · falhas ${s.counters.fail} · comutações ${s.counters.switches}` : '') + (fr ? ` | motivos: aguardando dados ${fr.wait} · DNS ${fr.dns} · timeout ${fr.timeout} · outros ${fr.other}` : '');
+    if (s.waiting) $('lvSince').textContent = 'aguardando dados do satélite' + ($('lvSince').textContent ? ' · ' + $('lvSince').textContent : '');
   }
   function pctS(x) { return x == null ? '—' : (x * 100).toFixed(x >= 0.995 ? 0 : 1) + '%'; }
   function drawKpis(rs) {
@@ -146,7 +148,7 @@
   }
   async function loadReplay() {
     if (replay) return replay;
-    const r = await fetch('replay.json?v=38', { cache: 'no-store' }); replay = await r.json();
+    const r = await fetch('replay.json?v=39', { cache: 'no-store' }); replay = await r.json();
     $('replayTitle').textContent = replay.title; return replay;
   }
   function stopReplay() { clearInterval(rpTimer); rpTimer = null; $('rpPlay').textContent = '▶ Reproduzir'; }

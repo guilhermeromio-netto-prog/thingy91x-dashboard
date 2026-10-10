@@ -114,7 +114,8 @@
     const ageSec = Math.round((now - lastRx) / 1000);
     return { net, since, sinceSec: since ? Math.round((now - Date.parse(since)) / 1000) : null, rsrp: lastTel ? lastTel.rsrp : null, snr: lastTel ? lastTel.snr : null,
       plmn: lastTel ? lastTel.plmn : null, band: lastTel ? lastTel.band : null, mv: lastTel ? lastTel.mv : null, temp: lastTel ? lastTel.temp : null,
-      lastRx: new Date(lastRx).toISOString(), ageSec, stale: ageSec > (net === 'ntn' ? 900 : 300), counters: lastTel ? lastTel.counters : null };
+      lastRx: new Date(lastRx).toISOString(), ageSec, stale: ageSec > (net === 'ntn' ? 900 : 300), counters: lastTel ? lastTel.counters : null, failReasons: lastTel ? lastTel.failReasons : null,
+      waiting: (() => { const w = [...rs].reverse().find((r) => r.type === 'event' && (r.event === 'wait' || r.event === 'reg' || r.event === 'sw')); return !!(w && w.event === 'wait'); })() };
   }
 
   /** Pontos do mapa (com posição) e segmentos coloridos por rede. */
@@ -143,6 +144,6 @@
     return Math.floor(s / 3600) + ' h ' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + ' min';
   }
   function fmtMs(ms) { if (ms == null) return '—'; return ms >= 1000 ? (ms / 1000).toFixed(ms >= 10000 ? 0 : 1) + ' s' : Math.round(ms) + ' ms'; }
-  const EVENT_PT = { sw: 'Comutação', reg: 'Registrado', lost: 'Perdeu rede', fix: 'Fix GNSS', fail: 'Falha', auto: 'Modo automático', demo: 'Demo de comutação', boot: 'Placa ligou', rst: 'Reinício Cat-M', ping: 'Ping' };
+  const EVENT_PT = { sw: 'Comutação', reg: 'Registrado', lost: 'Perdeu rede', fix: 'Fix GNSS', fail: 'Falha', auto: 'Modo automático', demo: 'Demo de comutação', boot: 'Placa ligou', rst: 'Reinício Cat-M', ping: 'Ping', wait: 'Aguardando dados do satélite/rede', wdog: 'Watchdog: reinício da rede' };
   return { NET, gpsStatus, filterRecords, switches, kpis, liveStatus, mapPoints, segments, toCSV, fmtDur, fmtMs, pct, EVENT_PT, sortRecs };
 });
