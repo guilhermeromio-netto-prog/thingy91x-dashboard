@@ -118,8 +118,8 @@
   }
 
   /** Pontos do mapa (com posição) e segmentos coloridos por rede. */
-  function mapPoints(recs) {
-    return sortRecs(recs).filter((r) => r.lat != null && r.lon != null).map((r) => ({ lat: r.lat, lon: r.lon, net: r.net, rec: r }));
+  function mapPoints(recs, showSaved = false) {
+    return sortRecs(recs).filter((r) => r.lat != null && r.lon != null && (showSaved || !/^salva|sem posicao/.test(r.posSrc || ''))).map((r) => ({ lat: r.lat, lon: r.lon, net: r.net, rec: r }));
   }
   function segments(points) {
     const segs = []; let cur = null;

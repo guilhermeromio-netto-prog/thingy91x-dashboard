@@ -46,7 +46,7 @@
   }
   function drawMap(rs) {
     layer.clearLayers();
-    const pts = P.mapPoints(rs);
+    const pts = P.mapPoints(rs, st.pos === 'salva');
     for (const s of P.segments(pts)) L.polyline(s.pts, { color: P.NET[s.net]?.color || '#888', weight: 4, opacity: 0.85 }).addTo(layer);
     pts.forEach((p, i) => {
       const r = p.rec, c = P.NET[p.net]?.color || '#888', ev = r.type === 'event';
@@ -75,7 +75,9 @@
     $('lvRx').textContent = dmy(s.lastRx) + (s.stale && st.src !== 'replay' ? ' · sem novidades' : '');
     $('lvDev').textContent = s.mv != null ? (s.mv / 1000).toFixed(2) + ' V' + (s.temp != null ? ' · ' + s.temp + ' °C' : '') : '—';
     const g = P.gpsStatus(all, nowRef());
-    $('lvGps').textContent = g.age == null ? 'sem fix' : 'fix há ' + P.fmtDur(g.age);
+    const noPos = /salva|sem posicao/.test(g.src || '');
+    $('lvGps').textContent = noPos ? 'sem posição no momento' : g.age == null ? 'sem fix' : 'fix há ' + P.fmtDur(g.age);
+    $('lvGps').style.color = noPos ? '#ffb020' : '';
     $('lvGpsD').textContent = [g.sats != null && g.sats + ' sats', g.src && 'posição: ' + g.src, g.acc != null && '±' + g.acc + ' m'].filter(Boolean).join(' · ');
     $('lvCnt').textContent = s.counters ? `envios ${s.counters.tries} · ok ${s.counters.ok} · falhas ${s.counters.fail} · comutações ${s.counters.switches}` : '';
   }
@@ -144,7 +146,7 @@
   }
   async function loadReplay() {
     if (replay) return replay;
-    const r = await fetch('replay.json?v=37', { cache: 'no-store' }); replay = await r.json();
+    const r = await fetch('replay.json?v=38', { cache: 'no-store' }); replay = await r.json();
     $('replayTitle').textContent = replay.title; return replay;
   }
   function stopReplay() { clearInterval(rpTimer); rpTimer = null; $('rpPlay').textContent = '▶ Reproduzir'; }

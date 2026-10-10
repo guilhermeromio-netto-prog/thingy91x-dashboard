@@ -73,17 +73,29 @@ export function parseCell(cl, rsrp) {
 async function cellFix(store, lte) {
   const key = 'cell/' + [lte.mcc, lte.mnc, lte.tac, lte.eci].join('-');
   const hit = await store.get(key, { type: 'json' }).catch(() => null);
-  if (hit && (hit.lat != null ? Date.now() - hit.at < 30 * 86400000 : Date.now() - hit.at < 6 * 3600000)) return hit;
-  const tok = (process.env.NRF_TEAM_READ_TOKEN || process.env.NRF_TEAM_WRITE_TOKEN || '').trim().replace(/^Bearer\s+/i, '');
-  let out = { lat: null, lon: null, acc: null, at: Date.now(), err: 'sem token' };
-  if (tok) {
+  if (hit && (hit.lat != null ? Date.now() - hit.at < 30 * 86400000 : !/HTTP 40[13]|sem token/.test(hit.err || '') && Date.now() - hit.at < 3600000)) return hit;
+  const clean = (v) => String(v || '').trim().replace(/^["']|["']$/g, '').replace(/^Bearer\s+/i, '').trim();
+  const toks = [...new Set([process.env.NRF_LOCATION_TOKEN, process.env.NRF_TEAM_READ_TOKEN, process.env.NRF_TEAM_WRITE_TOKEN].map(clean).filter(Boolean))];
+  let out = { lat: null, lon: null, acc: null, at: Date.now(), err: 'sem token' }, authErr = false;
+  for (const [i, tok] of toks.entries()) {
     try {
       const r = await fetch('https://api.nrfcloud.com/v1/location/ground-fix', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify({ lte: [lte] }), signal: AbortSignal.timeout(8000) });
       const j = await r.json().catch(() => ({}));
-      if (r.ok && typeof j.lat === 'number') out = { lat: j.lat, lon: j.lon, acc: Math.round(j.uncertainty ?? 0) || null, at: Date.now(), via: j.fulfilledWith || 'SCELL' };
-      else out.err = 'nRF Cloud HTTP ' + r.status + (j.message ? ': ' + String(j.message).slice(0, 60) : '');
+      if (r.ok && typeof j.lat === 'number') { out = { lat: j.lat, lon: j.lon, acc: Math.round(j.uncertainty ?? 0) || null, at: Date.now(), via: j.fulfilledWith || 'SCELL' }; authErr = false; break; }
+      authErr = r.status === 401 || r.status === 403;
+      out.err = 'nRF Cloud HTTP ' + r.status + (j.message ? ': ' + String(j.message).slice(0, 50) : '') + ` [tok${i} len ${tok.length}${/^[0-9a-f]+$/i.test(tok) ? ' hex' : tok.split('.').length === 3 ? ' jwt' : ' outro'}]`;
     } catch (e) { out.err = 'nRF Cloud: ' + String(e && e.message || e).slice(0, 60); }
   }
+  // fallback gratuito sem chave: BeaconDB (API compativel com Mozilla Location Service)
+  if (out.lat == null) {
+    try {
+      const r = await fetch('https://api.beacondb.net/v1/geolocate', { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'ntn-lab/1.0 (thingy91x-dashboard)' }, body: JSON.stringify({ considerIp: false, cellTowers: [{ radioType: 'lte', mobileCountryCode: lte.mcc, mobileNetworkCode: lte.mnc, locationAreaCode: lte.tac, cellId: lte.eci, ...(lte.rsrp ? { signalStrength: lte.rsrp } : {}) }] }), signal: AbortSignal.timeout(8000) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.location) { out = { lat: j.location.lat, lon: j.location.lng, acc: Math.round(j.accuracy || 0) || null, at: Date.now(), via: 'beacondb', nrfErr: out.err }; authErr = false; }
+      else out.err = (out.err ? out.err + ' | ' : '') + 'BeaconDB ' + r.status + (r.status === 404 ? ' celula desconhecida' : '');
+    } catch (e) { out.err = (out.err || '') + ' | BeaconDB: ' + String(e && e.message || e).slice(0, 40); }
+  }
+  if (out.lat == null && (authErr || out.err === 'sem token') && !/BeaconDB 404/.test(out.err)) return out;
   await store.setJSON(key, out).catch(() => {});
   return out;
 }
@@ -118,7 +130,7 @@ export default async (req) => {
       const lte = parseCell(rec.cell, rec.rsrp);
       if (lte) {
         const f = await cellFix(store, lte);
-        if (f.lat != null) Object.assign(rec, { lat: f.lat, lon: f.lon, acc: f.acc, posSrc: 'celula' });
+        if (f.lat != null) Object.assign(rec, { lat: f.lat, lon: f.lon, acc: f.acc, posSrc: 'celula', posVia: f.via || null });
         else Object.assign(rec, { lat: null, lon: null, acc: null, posSrc: 'celula sem posicao', posErr: f.err });
       }
     }
