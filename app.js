@@ -3689,10 +3689,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Pairing link Mac→phone: #cfg=base64url(JSON) — before init
     importConfigFromHash();
     if ('serviceWorker' in navigator) {
-        const swHref = new URL('service-worker.js?v=32', document.baseURI || location.href).href;
+        const swHref = new URL('service-worker.js?v=36', document.baseURI || location.href).href;
         // Limpa caches antigos (Cmd+Shift+R no Safari muitas vezes não basta)
-        const bustKey = 'thingy_sw_bust_v32';
-        caches.keys().then(keys => Promise.all(keys.filter(k => k !== 'thingy91x-v32').map(k => caches.delete(k)))).catch(() => {});
+        const bustKey = 'thingy_sw_bust_v36';
+        caches.keys().then(keys => Promise.all(keys.filter(k => !k.startsWith('ntn-v36')).map(k => caches.delete(k)))).catch(() => {});
         navigator.serviceWorker.getRegistrations().then(async regs => {
             for (const r of regs) {
                 try { await r.update(); } catch { /* ignore */ }
