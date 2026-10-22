@@ -12,6 +12,12 @@ const API = BASE_URL + '/.netlify/functions/ntn-lab';
 
 // ---------- fetch ----------
 
+// H3: avisa o pwa.js se a resposta veio do cache offline (campo __cachedAt).
+function noteOffline(j) {
+  if (typeof window !== 'undefined' && window.Pwa && window.Pwa.noteData) window.Pwa.noteData(j);
+  return j;
+}
+
 /**
  * Busca registros do Rastreador.
  * @param {number} days - janela em dias (padrao 7)
@@ -19,7 +25,7 @@ const API = BASE_URL + '/.netlify/functions/ntn-lab';
  */
 async function fetchTracker(days = 7) {
   const r = await fetch(API + '?pro=1&days=' + days + '&t=' + Date.now(), { cache: 'no-store' });
-  const j = await r.json();
+  const j = noteOffline(await r.json());
   return Array.isArray(j.records) ? j.records : [];
 }
 
@@ -30,7 +36,7 @@ async function fetchTracker(days = 7) {
  */
 async function fetchMeter(days = 62) {
   const r = await fetch(API + '?meter=1&days=' + days + '&t=' + Date.now(), { cache: 'no-store' });
-  const j = await r.json();
+  const j = noteOffline(await r.json());
   return Array.isArray(j.records) ? j.records : [];
 }
 
