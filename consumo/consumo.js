@@ -10,7 +10,7 @@ function devOf(r){return r.dv&&/^m/.test(r.dv)?'meter':'tracker'}
 function isSat(r){var n=(r.txNet||r.net||'').toLowerCase();return n&&n!=='catm'&&n!=='lte'&&n!=='ltem'}
 function fb(b){if(b==null)return 'sem dados';if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';return (b/1048576).toFixed(2)+' MB'}
 function fd(s){return new Date(s).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})+' (BRT)'}
-async function get(q){var r=await fetch(B+q+'&t='+Date.now(),{cache:'no-store'});var j=await r.json();return Array.isArray(j.records)?j.records:[]}
+async function get(q){var r=await fetch(B+q+'&t='+Date.now(),{cache:'no-store'});var j=await r.json();if(window.Pwa)window.Pwa.noteData(j);return Array.isArray(j.records)?j.records:[]}
 async function load(){
  try{var a=await Promise.all([get('?pro=1&days=14'),get('?meter=1&days=62')]);var m={};
   a[0].concat(a[1]).forEach(function(r){if(typeof r.bytes!=='number')return;m[r.rx+'|'+r.seq+'|'+devOf(r)]=r});
